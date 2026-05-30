@@ -1,0 +1,18 @@
+[package]
+name = "rntb3de"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sdl3 = "0.18.0"
+renderer = {path = "crates/renderer"}
+glam = "0.33.0"
+bytemuck = "1.25.0"
+
+[workspace]
+resolver = "3"
+members=["crates/internals","crates/renderer"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
