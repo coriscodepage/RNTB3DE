@@ -54,8 +54,8 @@ pub fn main() {
             let g = *(unsafe { bytes.get_unchecked(tex_idx.unchecked_add(1)) }) as f32 / 255.0;
             let b = *(unsafe { bytes.get_unchecked(tex_idx.unchecked_add(2)) }) as f32 / 255.0;
             
-            glam::Vec4::new(r, g, b, 1.0)
-            // glam::Vec4::new(1.0, 1.0, 1.0, 1.0)
+            // glam::Vec4::new(r, g, b, 1.0)
+            glam::Vec4::new(1.0, 1.0, 1.0, 1.0)
         },
     );
 

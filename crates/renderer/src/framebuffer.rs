@@ -93,12 +93,12 @@ pub struct Tile {
 }
 
 impl Tile {
-    pub fn min(&self) -> Vec2 {
-        Vec2::new(self.x as f32, self.y as f32)
+    pub fn min(&self) -> IVec2 {
+        IVec2::new(self.x as i32, self.y as i32)
     }
 
-    pub fn max(&self) -> Vec2 {
-        Vec2::new((self.x + self.width) as f32, (self.y + self.height) as f32)
+    pub fn max(&self) -> IVec2 {
+        IVec2::new((self.x + self.width) as i32, (self.y + self.height) as i32)
     }
 }
 

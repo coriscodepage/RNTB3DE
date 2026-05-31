@@ -11,7 +11,7 @@ use crate::{
     rasterizer::Rasterizer,
     renderer::Renderer,
 };
-use glam::{IVec2, Vec2, Vec3, Vec4};
+use glam::{IVec2, Vec4};
 use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::fmt::Debug;
 
@@ -52,9 +52,6 @@ where
         };
 
         let mut framebuffer = renderer.take_framebuffer(render_buffer);
-        let screen_width = framebuffer.width();
-        let screen_height = framebuffer.height();
-
         let triangles = mesh
             .positions
             .chunks_exact(3)
@@ -64,11 +61,7 @@ where
                 let v1 = (self.vertex_shader)(Vertex::new(pos[1], data[1]));
                 let v2 = (self.vertex_shader)(Vertex::new(pos[2], data[2]));
                 Triangle {
-                    screen_space: [
-                        Self::to_screen_space(v0.position, screen_width, screen_height),
-                        Self::to_screen_space(v1.position, screen_width, screen_height),
-                        Self::to_screen_space(v2.position, screen_width, screen_height),
-                    ],
+                    position: [v0.position, v1.position, v2.position],
                     data: [v0.data, v1.data, v2.data],
                 }
             })
@@ -92,45 +85,47 @@ where
         //         },
         //     );
         // }
+        let screen_width = framebuffer.width();
+        let screen_height = framebuffer.height();
         let cols = screen_width.div_ceil(TILE_SIZE.0);
         let rows = screen_height.div_ceil(TILE_SIZE.1);
         let fb_ptr = (&mut framebuffer as *mut Framebuffer) as usize;
 
-        let tiles = (0..rows)
-            .flat_map(|row| {
-                (0..cols).map(move |col| {
-                    let x = col * TILE_SIZE.0;
-                    let y = row * TILE_SIZE.1;
-                    Tile {
-                        x,
-                        y,
-                        width: TILE_SIZE.0.min(screen_width - x),
-                        height: TILE_SIZE.1.min(screen_height - y),
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        let fragment_shader = &self.fragment_shader;
-        let bins = self.bin_triangles(&triangles, &tiles);
-        bins.iter().for_each(move |bin| {
-            // let mut frags = vec![];
-            for &index in &bin.indices {
-                Rasterizer::rasterize(&triangles[index], |fragment| {
-                    let frag_color = fragment_shader(fragment);
-                    let fb_ptr = fb_ptr as *mut Framebuffer; // Safety: This is whack
-                    unsafe {
-                        (*fb_ptr).write_fragment(
-                            fragment.position.x as usize,
-                            fragment.position.y as usize,
-                            fragment.depth,
-                            frag_color,
-                        )
-                    };
-                    // frags.push((fragment.position, frag_color));
-                });
-            }
-            // frags
-        });
+        // let tiles = (0..rows)
+        //     .flat_map(|row| {
+        //         (0..cols).map(move |col| {
+        //             let x = col * TILE_SIZE.0;
+        //             let y = row * TILE_SIZE.1;
+        //             Tile {
+        //                 x,
+        //                 y,
+        //                 width: TILE_SIZE.0.min(screen_width - x),
+        //                 height: TILE_SIZE.1.min(screen_height - y),
+        //             }
+        //         })
+        //     })
+        //     .collect::<Vec<_>>();
+        // let fragment_shader = &self.fragment_shader;
+        // let bins = self.bin_triangles(&triangles, &tiles, screen_width, screen_height);
+        // bins.iter().for_each(move |bin| {
+        //     // let mut frags = vec![];
+        //     for &index in &bin.indices {
+        //         Rasterizer::rasterize(&triangles[index], screen_width, screen_height, &bin.tile, |fragment| {
+        //             let frag_color = fragment_shader(fragment);
+        //             let fb_ptr = fb_ptr as *mut Framebuffer; // Safety: This is whack
+        //             unsafe {
+        //                 (*fb_ptr).write_fragment(
+        //                     fragment.position.x as usize,
+        //                     fragment.position.y as usize,
+        //                     fragment.depth,
+        //                     frag_color,
+        //                 )
+        //             };
+        //             // frags.push((fragment.position, frag_color));
+        //         });
+        //     }
+        //     // frags
+        // });
         // .flatten()
         // .collect::<Vec<_>>();
         // for (pos, col) in rendered {
@@ -143,20 +138,28 @@ where
         //         )
         //     };
         // }
+        for triangle in &triangles {
+            Rasterizer::rasterize(triangle, screen_width, screen_height, |fragment| {
+                let frag_color = (self.fragment_shader)(fragment);
+                unsafe {
+                    framebuffer.write_fragment(
+                        fragment.position.x as usize,
+                        fragment.position.y as usize,
+                        0.5, // dummy depth value
+                        frag_color,
+                    )
+                };
+            });
+        }
         renderer.put_framebuffer(render_buffer, framebuffer);
-    }
-
-    #[inline(always)]
-    pub(crate) fn to_screen_space(position: Vec3, width: usize, height: usize) -> Vec3 {
-        let x = (position.x + 1.0) * 0.5 * width as f32;
-        let y = (1.0 - (position.y + 1.0) * 0.5) * height as f32;
-        Vec3::new(x, y, position.z)
     }
 
     fn bin_triangles(
         &self,
         triangles: &[Triangle<T>],
         tiles: &[Tile],
+        screen_width: usize,
+        screen_height: usize,
     ) -> Vec<TileBin> {
         let mut binned: Vec<TileBin> = tiles
             .iter()
@@ -166,14 +169,17 @@ where
             })
             .collect();
         for (i, triangle) in triangles.iter().enumerate() {
-            let Vec3 { x: ax, y: ay, .. } = triangle.screen_space[0];
-            let Vec3 { x: bx, y: by, .. } = triangle.screen_space[1];
-            let Vec3 { x: cx, y: cy, .. } = triangle.screen_space[2];
+            let IVec2 { x: ax, y: ay } =
+                Rasterizer::to_screen_space(triangle.position[0], screen_width, screen_height);
+            let IVec2 { x: bx, y: by } =
+                Rasterizer::to_screen_space(triangle.position[1], screen_width, screen_height);
+            let IVec2 { x: cx, y: cy } =
+                Rasterizer::to_screen_space(triangle.position[2], screen_width, screen_height);
 
-            let bb_min_x = f32::min(f32::min(ax, bx), cx); // bounding box for the triangle
-            let bb_min_y = f32::min(f32::min(ay, by), cy); // defined by its top left and bottom right corners
-            let bb_max_x = f32::max(f32::max(ax, bx), cx);
-            let bb_max_y = f32::max(f32::max(ay, by), cy);
+            let bb_min_x = min(min(ax, bx), cx);
+            let bb_min_y = min(min(ay, by), cy);
+            let bb_max_x = max(max(ax, bx), cx);
+            let bb_max_y = max(max(ay, by), cy);
             for bin in binned.iter_mut() {
                 let tile_min = bin.tile.min();
                 let tile_max = bin.tile.max();

@@ -1,4 +1,4 @@
-use glam::{IVec2, Vec3};
+use glam::Vec3;
 
 use crate::lerp::Lerp;
 
@@ -32,6 +32,6 @@ pub struct Triangle<T>
 where
     T: Lerp + Send + Sync,
 {
-    pub(crate) screen_space: [Vec3; 3],
+    pub(crate) position: [Vec3; 3],
     pub(crate) data: [T; 3],
 }
