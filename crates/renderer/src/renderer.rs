@@ -1,7 +1,6 @@
 use glam::Vec4;
 
-use crate::{forward_pipeline::PipelineForward, framebuffer::Framebuffer, mesh::Mesh};
-use std::fmt::Debug;
+use crate::framebuffer::Framebuffer;
 
 pub struct Renderer {
     framebuffers: Vec<Option<Framebuffer>>,
