@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 pub fn main() {
     let sdl_context = sdl3::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
-
     let mut canvas = video_subsystem
         .window_and_renderer("RNTB3DE", 800, 600).unwrap();
     
@@ -66,7 +65,7 @@ pub fn main() {
     let file = fs::read_to_string("african_head.obj").unwrap();
     let model = Model::from_obj_string(&file);
     'running: loop {
-        canvas.clear();
+        // canvas.clear();
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -94,13 +93,15 @@ pub fn main() {
         renderer.clear_framebuffer(fb_id);
         pipeline.assemble_and_run(&mut renderer, &model.mesh);
         let fb = renderer.borrow_framebuffer(fb_id);
-        buffer_to_u8(fb, &mut display_buffer);
-        tex.update(
-            Rect::new(0, 0, 800, 600),
-            bytemuck::cast_slice(&display_buffer),
-            800 * 4,
-        )
-        .unwrap();
+        tex.with_lock(None, |pixels: &mut [u8], _|{
+            buffer_to_u8(fb, bytemuck::cast_slice_mut(pixels));
+        }).unwrap();
+        // tex.update(
+        //     Rect::new(0, 0, 800, 600),
+        //     bytemuck::cast_slice(&display_buffer),
+        //     800 * 4,
+        // )
+        // .unwrap();
         
         canvas.copy(&tex, None, None).unwrap();
         canvas.present();
@@ -116,7 +117,7 @@ pub fn main() {
 }
 
 #[inline]
-fn buffer_to_u8(buffer: &Framebuffer, out: &mut Vec<i32>) {
+fn buffer_to_u8(buffer: &Framebuffer, out: &mut [i32]) {
     let (ra, ga, ba, _) = buffer.get_color();
     for i in 0..ra.len() {
         let r: i32 = unsafe { (ra[i] * 255.0).to_int_unchecked() };

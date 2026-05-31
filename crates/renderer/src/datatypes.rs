@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{IVec2, Vec2, Vec3};
 
 use crate::lerp::Lerp;
 
@@ -32,6 +32,7 @@ pub struct Triangle<T>
 where
     T: Lerp + Send + Sync,
 {
-    pub(crate) position: [Vec3; 3],
+    pub(crate) position: [IVec2; 3],
+    pub(crate) depth: [Vec2; 3],
     pub(crate) data: [T; 3],
 }

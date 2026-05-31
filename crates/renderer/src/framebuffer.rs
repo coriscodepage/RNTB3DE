@@ -47,18 +47,18 @@ impl Framebuffer {
         let b = color.z;
         let a = color.w;
 
-        self.r.fill(r);
-        self.g.fill(g);
-        self.b.fill(b);
-        self.a.fill(a);
-        self.depth.fill(f32::INFINITY);
-        // for i in 0..self.r.len() {
-        //     unsafe { *self.r.get_unchecked_mut(i) = r };
-        //     unsafe { *self.g.get_unchecked_mut(i) = g };
-        //     unsafe { *self.b.get_unchecked_mut(i) = b };
-        //     unsafe { *self.a.get_unchecked_mut(i) = a };
-        //     unsafe { *self.depth.get_unchecked_mut(i) = f32::INFINITY };
-        // }
+        // self.r.fill(r);
+        // self.g.fill(g);
+        // self.b.fill(b);
+        // self.a.fill(a);
+        // self.depth.fill(f32::INFINITY);
+        for i in 0..self.r.len() {
+            unsafe { *self.r.get_unchecked_mut(i) = r };
+            unsafe { *self.g.get_unchecked_mut(i) = g };
+            unsafe { *self.b.get_unchecked_mut(i) = b };
+            unsafe { *self.a.get_unchecked_mut(i) = a };
+            unsafe { *self.depth.get_unchecked_mut(i) = f32::INFINITY };
+        }
     }
 
     pub unsafe fn write_fragment(&mut self, x: usize, y: usize, depth: f32, color: Vec4) {

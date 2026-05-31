@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 approx = "0.5.1"
-bumpalo = "3.20.2"
-glam = {version="0.33.0", features = ["fast-math", "approx"]}
+bumpalo = { version = "3.20.2", features = ["collections"] }
+glam = { version = "0.33.0", features = ["fast-math", "approx"] }
 itertools = "0.14.0"
 rayon = "1.12.0"
 wide = "1.4.0"
