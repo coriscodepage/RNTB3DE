@@ -31,7 +31,7 @@ impl<T, VS, FS> PipelineForward<T, VS, FS>
 where
     T: Lerp + Copy + Debug + Send + Sync,
     VS: Fn(Vertex<T>) -> Vertex<T> + Send + Sync,
-    FS: Fn(FragmentInput<T>) -> Vec4 + Send + Sync,
+    FS: Fn(&FragmentInput<T>) -> Vec4 + Send + Sync,
 {
     pub fn new(vertex_shader: VS, fragment_shader: FS) -> Self {
         Self {
@@ -74,7 +74,7 @@ where
                     x,
                     y,
                     width: TILE_SIZE.0.min(screen_width - x) as i32,
-                    height: TILE_SIZE.1.min(screen_height -  y) as i32,
+                    height: TILE_SIZE.1.min(screen_height - y) as i32,
                 }
             })
         }));
@@ -128,12 +128,10 @@ where
 
         self.bin_triangles();
         let fragment_shader = &self.fragment_shader;
-        // black_box(bins);
-        self.bins.par_iter().for_each(|bin| {
-            // let mut frags = vec![];
+        self.bins.iter().for_each(|bin| {
             for &index in &bin.indices {
                 Rasterizer::rasterize(&self.triangles[index], &bin.tile, |fragment| {
-                    let frag_color = fragment_shader(fragment);
+                    let frag_color = fragment_shader(&fragment);
                     let fb_ptr = fb_ptr as *mut Framebuffer; // Safety: This is whack
                     unsafe {
                         (*fb_ptr).write_fragment(
@@ -143,10 +141,8 @@ where
                             frag_color,
                         )
                     };
-                    // frags.push((fragment.position, frag_color));
                 });
             }
-            // frags
         });
         // .flatten()
         // .collect::<Vec<_>>();
@@ -184,10 +180,11 @@ where
         // screen_height: usize,
     ) {
         if self.bins.len() < self.tiles.len() {
-            self.bins.extend((self.bins.len()..self.tiles.len()).map(|i| TileBin {
-                tile: self.tiles[i],
-                indices: SmallVec::new(),
-            }));
+            self.bins
+                .extend((self.bins.len()..self.tiles.len()).map(|i| TileBin {
+                    tile: self.tiles[i],
+                    indices: SmallVec::new(),
+                }));
         }
         for i in 0..self.bins.len() {
             self.bins[i].tile = self.tiles[i];
@@ -210,42 +207,46 @@ where
             let bb_min_y = min(min(ay, by), cy);
             let bb_max_x = max(max(ax, bx), cx);
             let bb_max_y = max(max(ay, by), cy);
-            for bin in self.bins.iter_mut() {
-                let tile_min = bin.tile.min();
-                let tile_max = bin.tile.max();
-                if tile_max.x < bb_min_x
-                    || tile_min.x > bb_max_x
-                    || tile_max.y < bb_min_y
-                    || tile_min.y > bb_max_y
-                {
-                    continue;
-                }
+            let total_area = Self::signed_triangle_area(ax, ay, bx, by, cx, cy);
+            if total_area >= 1.0 {
+                for bin in self.bins.iter_mut() {
+                    let tile_min = bin.tile.min();
+                    let tile_max = bin.tile.max();
+                    if tile_max.x < bb_min_x
+                        || tile_min.x > bb_max_x
+                        || tile_max.y < bb_min_y
+                        || tile_min.y > bb_max_y
+                    {
+                        continue;
+                    }
 
-                if tile_min.x <= bb_min_x
-                    && tile_max.x >= bb_max_x
-                    && tile_min.y <= bb_max_y
-                    && tile_max.y >= bb_max_y
-                {
+                    if tile_min.x <= bb_min_x
+                        && tile_max.x >= bb_max_x
+                        && tile_min.y <= bb_max_y
+                        && tile_max.y >= bb_max_y
+                    {
+                        bin.indices.push(i);
+                        continue;
+                    }
+
+                    let (x_normal_a, y_normal_a) = (-(by - ay), bx - ax);
+                    let (x_normal_b, y_normal_b) = (-(cy - by), cx - bx);
+                    let (x_normal_c, y_normal_c) = (-(ay - cy), ax - cx);
+                    let a = Self::furthest_point(tile_min, tile_max, x_normal_a, y_normal_a);
+                    let b = Self::furthest_point(tile_min, tile_max, x_normal_b, y_normal_b);
+                    let c = Self::furthest_point(tile_min, tile_max, x_normal_c, y_normal_c);
+                    if Self::edge_function(triangle.position[0], triangle.position[1], a) < 0
+                        || Self::edge_function(triangle.position[1], triangle.position[2], b) < 0
+                        || Self::edge_function(triangle.position[2], triangle.position[0], c) < 0
+                    {
+                        continue;
+                    }
                     bin.indices.push(i);
-                    continue;
                 }
-
-                let (x_normal_a, y_normal_a) = (-(by - ay), bx - ax);
-                let (x_normal_b, y_normal_b) = (-(cy - by), cx - bx);
-                let (x_normal_c, y_normal_c) = (-(ay - cy), ax - cx);
-                let a = Self::furthest_point(tile_min, tile_max, x_normal_a, y_normal_a);
-                let b = Self::furthest_point(tile_min, tile_max, x_normal_b, y_normal_b);
-                let c = Self::furthest_point(tile_min, tile_max, x_normal_c, y_normal_c);
-                if Self::edge_function(triangle.position[0], triangle.position[1], a) < 0
-                    || Self::edge_function(triangle.position[1], triangle.position[2], b) < 0
-                    || Self::edge_function(triangle.position[2], triangle.position[0], c) < 0
-                {
-                    continue;
-                }
-                bin.indices.push(i);
             }
         });
         self.bins.retain(|b| !b.indices.is_empty());
+        self.bins.iter_mut().for_each(|b| b.indices.sort_unstable());
         // dbg!(binned);
         // panic!();
         // binned
@@ -270,6 +271,12 @@ where
     #[inline(always)]
     fn edge_function(a: IVec2, b: IVec2, c: IVec2) -> i32 {
         (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    }
+
+    #[inline(always)]
+    fn signed_triangle_area(ax: i32, ay: i32, bx: i32, by: i32, cx: i32, cy: i32) -> f32 {
+        return 0.5
+            * ((by - ay) * (bx + ax) + (cy - by) * (cx + bx) + (ay - cy) * (ax + cx)) as f32;
     }
 
     #[inline(always)]

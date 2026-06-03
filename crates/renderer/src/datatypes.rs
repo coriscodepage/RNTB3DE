@@ -14,7 +14,7 @@ impl<T: Lerp> Vertex<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct FragmentInput<T: Lerp> {
     pub position: glam::IVec2,
     pub depth: f32,
@@ -23,7 +23,11 @@ pub struct FragmentInput<T: Lerp> {
 
 impl<T: Lerp> FragmentInput<T> {
     pub fn new(position: glam::IVec2, depth: f32, data: T) -> Self {
-        Self { position, depth, data }
+        Self {
+            position,
+            depth,
+            data,
+        }
     }
 }
 
