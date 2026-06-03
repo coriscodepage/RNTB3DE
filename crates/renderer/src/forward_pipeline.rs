@@ -22,7 +22,6 @@ pub struct PipelineForward<T: Lerp + Send + Sync, VS, FS> {
     fragment_shader: FS,
     render_buffer: Option<usize>,
     triangles: Vec<Triangle<T>>,
-    tiles: Vec<Tile>,
     bins: Vec<TileBin>,
     _marker: PhantomData<T>,
 }
@@ -40,7 +39,6 @@ where
             render_buffer: None,
             _marker: PhantomData,
             triangles: Vec::with_capacity(1000), // FIXME: Just straight up guessing.
-            tiles: Vec::with_capacity(100),
             bins: Vec::with_capacity(100),
         }
     }
@@ -59,26 +57,9 @@ where
         };
 
         let mut framebuffer = renderer.take_framebuffer(render_buffer);
-        self.tiles.clear();
         self.triangles.clear();
         let screen_width = framebuffer.width();
         let screen_height = framebuffer.height();
-
-        let cols = (screen_width + TILE_SIZE.0 - 1) / TILE_SIZE.0;
-        let rows = (screen_height + TILE_SIZE.1 - 1) / TILE_SIZE.1;
-        self.tiles.extend((0..rows).flat_map(|row| {
-            (0..cols).map(move |col| {
-                let x = col * TILE_SIZE.0;
-                let y = row * TILE_SIZE.1;
-                Tile {
-                    x,
-                    y,
-                    width: TILE_SIZE.0.min(screen_width - x) as i32,
-                    height: TILE_SIZE.1.min(screen_height - y) as i32,
-                }
-            })
-        }));
-        // .collect::<Vec<_>>();
 
         self.triangles.extend(
             mesh.positions
@@ -126,9 +107,9 @@ where
 
         let fb_ptr = (&mut framebuffer as *mut Framebuffer) as usize;
 
-        self.bin_triangles();
+        self.bin_triangles(framebuffer.get_tiles());
         let fragment_shader = &self.fragment_shader;
-        self.bins.iter().for_each(|bin| {
+        self.bins.par_iter().for_each(|bin| {
             for &index in &bin.indices {
                 Rasterizer::rasterize(&self.triangles[index], &bin.tile, |fragment| {
                     let frag_color = fragment_shader(&fragment);
@@ -175,19 +156,20 @@ where
     fn bin_triangles(
         &mut self,
         // triangles: &[Triangle<T>],
-        // tiles: &[Tile],
+        tiles: (&[Tile], &[usize]),
         // screen_width: usize,
         // screen_height: usize,
     ) {
-        if self.bins.len() < self.tiles.len() {
+        let (tiles, tile_list) = tiles;
+        if self.bins.len() < tile_list.len() {
             self.bins
-                .extend((self.bins.len()..self.tiles.len()).map(|i| TileBin {
-                    tile: self.tiles[i],
+                .extend((self.bins.len()..tile_list.len()).map(|i| TileBin {
+                    tile: tiles[i],
                     indices: SmallVec::new(),
                 }));
         }
         for i in 0..self.bins.len() {
-            self.bins[i].tile = self.tiles[i];
+            self.bins[i].tile = tiles[tile_list[i]];
             self.bins[i].indices.clear();
         }
         // .collect();
