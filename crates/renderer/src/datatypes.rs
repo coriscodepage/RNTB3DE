@@ -1,4 +1,4 @@
-use glam::{IVec2, Vec2, Vec3};
+use glam::{IVec2, Vec2};
 
 use crate::lerp::Lerp;
 

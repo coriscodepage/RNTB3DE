@@ -1,31 +1,27 @@
-use glam::Vec3;
 use internals::imports::model::{MeshData, Model};
 use renderer::datatypes::Vertex;
 use renderer::forward_pipeline::PipelineForward;
 use renderer::framebuffer::Framebuffer;
-use renderer::mesh::Mesh;
 use renderer::renderer::Renderer;
 use sdl3::keyboard::Keycode;
-use sdl3::rect::Rect;
 use sdl3::{event::Event, pixels::PixelFormat};
 use std::fs::{self, File};
 use std::time::{Duration, Instant};
 
+static WIDTH: usize = 1920;
+static HEIGHT: usize = 1080;
+
 pub fn main() {
     let sdl_context = sdl3::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
-    let mut canvas = video_subsystem
-        .window_and_renderer("RNTB3DE", 800, 600).unwrap();
-    
-    let binding = canvas.texture_creator();
-    let mut tex = binding
-        .create_texture(
-            PixelFormat::XRGB8888,
-            sdl3::render::TextureAccess::Streaming,
-            800,
-            600,
-        )
+    let mut window = video_subsystem
+        .window("RNTB3DE", WIDTH as u32, HEIGHT as u32).build()
         .unwrap();
+
+    // let binding = canvas.texture_creator();
+    // let mut tex = binding
+    //     .create_texture_streaming(PixelFormat::XRGB8888, WIDTH as u32, HEIGHT as u32)
+    //     .unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut second_start = Instant::now();
@@ -40,27 +36,31 @@ pub fn main() {
     let bytes = &buf[..info.buffer_size()];
 
     let mut renderer = Renderer::new();
-    let fb_id = renderer.create_framebuffer(800, 600);
+    let fb_id = renderer.create_framebuffer(WIDTH, HEIGHT);
     let mut pipeline = PipelineForward::new(
         |v: Vertex<MeshData>| v,
         |v| {
             // println!("{}, {}", v.data.texture_uv.x, v.data.texture_uv.y);
-            let tex_x = unsafe { (v.data.texture_uv.x * info.width as f32).to_int_unchecked::<usize>() };
-            let tex_y = unsafe { (v.data.texture_uv.y * info.height as f32).to_int_unchecked::<usize>() };
+            let tex_x =
+                unsafe { (v.data.texture_uv.x * info.width as f32).to_int_unchecked::<usize>() };
+            let tex_y =
+                unsafe { (v.data.texture_uv.y * info.height as f32).to_int_unchecked::<usize>() };
             // println!("{}, {}", tex_x, tex_y);
             let tex_idx = (tex_y * 1024 + tex_x) * 3;
             let r = *(unsafe { bytes.get_unchecked(tex_idx) }) as f32 / 255.0;
             let g = *(unsafe { bytes.get_unchecked(tex_idx.unchecked_add(1)) }) as f32 / 255.0;
             let b = *(unsafe { bytes.get_unchecked(tex_idx.unchecked_add(2)) }) as f32 / 255.0;
-            
-            // glam::Vec4::new(r, g, b, 1.0)
-            glam::Vec4::new(1.0, 1.0, 1.0, 1.0)
+
+            glam::Vec4::new(r, g, b, 1.0)
+            // glam::Vec4::new(1.0, 1.0, 1.0, 1.0)
         },
     );
+    std::thread::spawn(|| {
+            pipeline.attach_render_buffer(fb_id);
 
-    pipeline.attach_render_buffer(fb_id);
-    let mut display_buffer = vec![0i32; 800 * 600];
-    let mut i = 0;
+    });
+    // let mut display_buffer = vec![0i32; WIDTH * HEIGHT];
+    // let mut i = 0;
 
     let file = fs::read_to_string("african_head.obj").unwrap();
     let model = Model::from_obj_string(&file);
@@ -92,38 +92,31 @@ pub fn main() {
         // );
         renderer.clear_framebuffer(fb_id);
         pipeline.assemble_and_run(&mut renderer, &model.mesh);
-        let fb = renderer.borrow_framebuffer(fb_id);
-        tex.with_lock(None, |pixels: &mut [u8], _|{
-            buffer_to_u8(fb, bytemuck::cast_slice_mut(pixels));
-        }).unwrap();
+        let mut win_surf = window.surface(&event_pump).unwrap();
+        let pixels = unsafe { win_surf.without_lock_mut().unwrap() };
+        renderer.buffer_to_u8(fb_id, bytemuck::cast_slice_mut(pixels));
+        win_surf.update_window().unwrap();
+
+        // tex.with_lock(None, |pixels: &mut [u8], _| {
+        // buffer_to_u8(fb, bytemuck::cast_slice_mut(pixels));
+        // })
+        // .unwrap();
         // tex.update(
         //     Rect::new(0, 0, 800, 600),
         //     bytemuck::cast_slice(&display_buffer),
         //     800 * 4,
         // )
         // .unwrap();
-        
-        canvas.copy(&tex, None, None).unwrap();
-        canvas.present();
+
+        // canvas.copy(&tex, None, None).unwrap();
+        // canvas.present();
         if second_start.elapsed() >= Duration::new(1, 0) {
             println!("FPS: {}", frames);
             frames = 0;
             second_start = Instant::now();
         }
         frames += 1;
-        i += 1;
+        // i += 1;
         // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
-    }
-}
-
-#[inline]
-fn buffer_to_u8(buffer: &Framebuffer, out: &mut [i32]) {
-    let (ra, ga, ba, _) = buffer.get_color();
-    for i in 0..ra.len() {
-        let r: i32 = unsafe { (ra[i] * 255.0).to_int_unchecked() };
-        let g: i32 = unsafe { (ga[i] * 255.0).to_int_unchecked() };
-        let b: i32 = unsafe { (ba[i] * 255.0).to_int_unchecked() };
-        let combined = ((r as i32) << 16) + ((g as i32) << 8) + (b as i32);
-        unsafe { *out.get_unchecked_mut(i) = combined };
     }
 }

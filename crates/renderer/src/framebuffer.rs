@@ -1,6 +1,7 @@
 use glam::{IVec2, Vec2, Vec4};
+use smallvec::SmallVec;
 
-pub static TILE_SIZE: (usize, usize) = (128, 64);
+pub static TILE_SIZE: (i32, i32) = (128, 64);
 
 pub struct Framebuffer {
     r: Vec<f32>,
@@ -8,8 +9,10 @@ pub struct Framebuffer {
     b: Vec<f32>,
     a: Vec<f32>,
     depth: Vec<f32>,
-    width: usize,
-    height: usize,
+    width: i32,
+    height: i32,
+    generation: Vec<u32>,
+    current_generation: u32,
 }
 
 impl Framebuffer {
@@ -20,19 +23,26 @@ impl Framebuffer {
             b: vec![0.0; width * height],
             a: vec![0.0; width * height],
             depth: vec![f32::INFINITY; width * height],
-            width,
-            height,
+            width: width as i32,
+            height: height as i32,
+            generation: vec![0; width * height],
+            current_generation: 0,
         }
     }
 
     #[inline]
-    pub fn width(&self) -> usize {
+    pub fn width(&self) -> i32 {
         self.width
     }
 
     #[inline]
-    pub fn height(&self) -> usize {
+    pub fn height(&self) -> i32 {
         self.height
+    }
+
+    #[inline]
+    pub fn current_generation(&self) -> u32 {
+        self.current_generation
     }
 
     #[inline]
@@ -47,63 +57,64 @@ impl Framebuffer {
         let b = color.z;
         let a = color.w;
 
+        self.current_generation =self.current_generation.wrapping_add(1);
         // self.r.fill(r);
         // self.g.fill(g);
         // self.b.fill(b);
         // self.a.fill(a);
         // self.depth.fill(f32::INFINITY);
-        for i in 0..self.r.len() {
-            unsafe { *self.r.get_unchecked_mut(i) = r };
-            unsafe { *self.g.get_unchecked_mut(i) = g };
-            unsafe { *self.b.get_unchecked_mut(i) = b };
-            unsafe { *self.a.get_unchecked_mut(i) = a };
-            unsafe { *self.depth.get_unchecked_mut(i) = f32::INFINITY };
-        }
+        // for i in 0..self.r.len() {
+        //     self.r[i] = r;
+        //     self.g[i] = g;
+        //     self.b[i] = b;
+        //     self.a[i] = a;
+        //     self.depth[i] = f32::INFINITY;
+        // }
     }
 
-    pub unsafe fn write_fragment(&mut self, x: usize, y: usize, depth: f32, color: Vec4) {
-        let index = unsafe { y.unchecked_mul(self.width).unchecked_add(x) };
-        if depth < *unsafe { self.depth.get_unchecked(index) } {
+    pub unsafe fn write_fragment(&mut self, x: i32, y: i32, depth: f32, color: Vec4) {
+        let index = unsafe { y.unchecked_mul(self.width).unchecked_add(x) as usize};
+        if depth < self.depth[index] {
             unsafe { *self.depth.get_unchecked_mut(index) = depth };
             unsafe { *self.r.get_unchecked_mut(index) = color.x };
             unsafe { *self.g.get_unchecked_mut(index) = color.y };
             unsafe { *self.b.get_unchecked_mut(index) = color.z };
             unsafe { *self.a.get_unchecked_mut(index) = color.w };
+            unsafe { *self.generation.get_unchecked_mut(index) = self.current_generation };
         }
     }
 
-    pub fn get_color(&self) -> (&Vec<f32>, &Vec<f32>, &Vec<f32>, &Vec<f32>) {
+    pub fn get_color(&self) -> (&Vec<f32>, &Vec<f32>, &Vec<f32>, &Vec<f32>, &Vec<u32>) {
         (
             self.r.as_ref(),
             self.g.as_ref(),
             self.b.as_ref(),
             self.a.as_ref(),
+            self.generation.as_ref()
         )
     }
 }
 
-
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Tile {
-    pub(crate) width: usize,
-    pub(crate) height: usize,
-    pub(crate) x: usize,
-    pub(crate) y: usize,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
 }
 
 impl Tile {
     pub fn min(&self) -> IVec2 {
-        IVec2::new(self.x as i32, self.y as i32)
+        IVec2::new(self.x, self.y)
     }
 
     pub fn max(&self) -> IVec2 {
-        IVec2::new((self.x + self.width) as i32, (self.y + self.height) as i32)
+        IVec2::new(self.x + self.width , self.y + self.height )
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct TileBin {
     pub(crate) tile: Tile,
-    pub(crate) indices: Vec<usize>
+    pub(crate) indices: SmallVec<[usize; 64]>,
 }
