@@ -100,3 +100,31 @@ pub(crate) fn morton(mut x: u32, mut y: u32) -> u32 {
 
     x | (y << 1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::vec4;
+
+    #[test]
+    fn framebuffer_binding_round_trips_through_renderer() {
+        let mut renderer = Renderer::new();
+        let framebuffer_id = renderer.create_framebuffer(2, 2);
+
+        let mut framebuffer = renderer.take_framebuffer(framebuffer_id);
+        unsafe {
+            framebuffer.write_fragment(0, 0, 0.25, vec4(1.0, 0.0, 0.0, 1.0));
+        }
+        renderer.put_framebuffer(framebuffer_id, framebuffer);
+
+        let framebuffer = renderer.take_framebuffer(framebuffer_id);
+        assert_eq!(framebuffer.read_pixel(0, 0), vec4(1.0, 0.0, 0.0, 1.0));
+        renderer.put_framebuffer(framebuffer_id, framebuffer);
+
+        renderer.clear_framebuffer(framebuffer_id);
+
+        let framebuffer = renderer.take_framebuffer(framebuffer_id);
+        assert_eq!(framebuffer.read_pixel(0, 0), vec4(0.0, 0.0, 0.0, 1.0));
+        assert!(framebuffer.depth_test(0, 0, 0.5));
+    }
+}

@@ -180,3 +180,48 @@ pub struct TileBin {
     pub(crate) indices: SmallVec<[usize; 8]>,
     pub(crate) morton_key: u32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{vec4, IVec2};
+
+    #[test]
+    fn clear_resets_visible_state_via_generation() {
+        let mut framebuffer = Framebuffer::new(2, 2);
+        let initial_generation = framebuffer.current_generation();
+
+        framebuffer.clear(vec4(0.25, 0.5, 0.75, 1.0));
+        assert_eq!(framebuffer.current_generation(), initial_generation + 1);
+        assert_eq!(framebuffer.read_pixel(0, 0), vec4(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(framebuffer.read_depth(0, 0), f32::INFINITY);
+        assert!(framebuffer.depth_test(0, 0, 0.5));
+
+        unsafe {
+            framebuffer.write_fragment(1, 1, 0.25, vec4(1.0, 0.0, 0.0, 1.0));
+        }
+
+        assert_eq!(framebuffer.read_pixel(1, 1), vec4(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(framebuffer.read_depth(1, 1), 0.25);
+        assert!(!framebuffer.depth_test(1, 1, 0.5));
+
+        framebuffer.clear(vec4(0.0, 0.0, 0.0, 0.0));
+        assert_eq!(framebuffer.read_pixel(1, 1), vec4(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(framebuffer.read_depth(1, 1), f32::INFINITY);
+        assert!(framebuffer.depth_test(1, 1, 0.5));
+    }
+
+    #[test]
+    fn partial_framebuffer_tiles_are_clipped_to_the_framebuffer_bounds() {
+        let framebuffer = Framebuffer::new(65, 65);
+        let tiles = framebuffer.get_tiles();
+
+        assert_eq!(tiles.cols, 2);
+        assert_eq!(tiles.rows, 2);
+        assert_eq!(tiles.tiles.len(), 4);
+        assert_eq!(tiles.tiles[0].min(), IVec2::new(0, 0));
+        assert_eq!(tiles.tiles[0].max(), IVec2::new(64, 64));
+        assert_eq!(tiles.tiles[3].min(), IVec2::new(64, 64));
+        assert_eq!(tiles.tiles[3].max(), IVec2::new(65, 65));
+    }
+}

@@ -134,3 +134,66 @@ impl Rasterizer {
             );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::{vec4, Vec2, Vec4};
+
+    fn test_triangle() -> Triangle<Vec4> {
+        Triangle {
+            position: [IVec2::new(0, 0), IVec2::new(3, 0), IVec2::new(0, 3)],
+            depth: [Vec2::new(0.2, 0.0), Vec2::new(0.4, 0.0), Vec2::new(0.6, 0.0)],
+            data: [
+                vec4(1.0, 0.0, 0.0, 1.0),
+                vec4(0.0, 1.0, 0.0, 1.0),
+                vec4(0.0, 0.0, 1.0, 1.0),
+            ],
+        }
+    }
+
+    #[test]
+    fn rasterize_emits_fragments_inside_tile() {
+        let triangle = test_triangle();
+        let tile = Tile {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 4,
+        };
+
+        let mut fragments = Vec::new();
+        Rasterizer::rasterize(&triangle, &tile, |fragment| fragments.push(fragment));
+
+        let top_left = fragments
+            .iter()
+            .find(|fragment| fragment.position == IVec2::new(0, 0))
+            .expect("expected the triangle corner fragment to be rasterized");
+
+        assert_eq!(top_left.data, vec4(1.0, 0.0, 0.0, 1.0));
+        assert!((top_left.depth - 0.2).abs() < 1e-6);
+        assert!(!fragments.is_empty());
+        assert!(fragments.iter().all(|fragment| {
+            fragment.position.x >= tile.min().x
+                && fragment.position.x <= tile.max().x - 1
+                && fragment.position.y >= tile.min().y
+                && fragment.position.y <= tile.max().y - 1
+        }));
+    }
+
+    #[test]
+    fn rasterize_skips_tiles_that_do_not_overlap_the_triangle() {
+        let triangle = test_triangle();
+        let tile = Tile {
+            x: 8,
+            y: 8,
+            width: 4,
+            height: 4,
+        };
+
+        let mut fragments = Vec::new();
+        Rasterizer::rasterize(&triangle, &tile, |fragment| fragments.push(fragment));
+
+        assert!(fragments.is_empty());
+    }
+}

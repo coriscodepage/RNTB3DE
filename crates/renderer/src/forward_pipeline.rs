@@ -304,3 +304,51 @@ where
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{datatypes::Vertex, mesh::Mesh, renderer::Renderer};
+    use glam::{vec3, vec4, Vec4};
+
+    #[test]
+    fn assemble_and_run_writes_the_rasterized_triangle() {
+        let mut renderer = Renderer::new();
+        let framebuffer_id = renderer.create_framebuffer(4, 4);
+
+        let mut pipeline = PipelineForward::new(|vertex: Vertex<Vec4>| vertex, |fragment| fragment.data);
+        pipeline.attach_render_buffer(framebuffer_id);
+
+        let mesh = Mesh::new(
+            vec![
+                Vertex::new(vec3(-1.0, 1.0, 0.2), vec4(1.0, 0.0, 0.0, 1.0)),
+                Vertex::new(vec3(1.0, 1.0, 0.4), vec4(0.0, 1.0, 0.0, 1.0)),
+                Vertex::new(vec3(-1.0, -1.0, 0.6), vec4(0.0, 0.0, 1.0, 1.0)),
+            ],
+            None,
+        );
+
+        pipeline.assemble_and_run(&mut renderer, &mesh);
+
+        let framebuffer = renderer.take_framebuffer(framebuffer_id);
+        assert_eq!(framebuffer.read_pixel(0, 0), vec4(1.0, 0.0, 0.0, 1.0));
+        assert!((framebuffer.read_depth(0, 0) - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn run_pixel_writes_through_the_bound_framebuffer() {
+        let mut renderer = Renderer::new();
+        let framebuffer_id = renderer.create_framebuffer(2, 2);
+
+        let mut pipeline = PipelineForward::new(|vertex: Vertex<Vec4>| vertex, |fragment| fragment.data);
+        pipeline.attach_render_buffer(framebuffer_id);
+
+        pipeline.run_pixel(&mut renderer, |(x, y)| vec4(x as f32, y as f32, 0.25, 1.0));
+
+        let framebuffer = renderer.take_framebuffer(framebuffer_id);
+        assert_eq!(framebuffer.read_pixel(0, 0), vec4(0.0, 0.0, 0.25, 1.0));
+        assert_eq!(framebuffer.read_pixel(1, 0), vec4(1.0, 0.0, 0.25, 1.0));
+        assert_eq!(framebuffer.read_pixel(0, 1), vec4(0.0, 1.0, 0.25, 1.0));
+        assert_eq!(framebuffer.read_pixel(1, 1), vec4(1.0, 1.0, 0.25, 1.0));
+    }
+}
