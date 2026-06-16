@@ -40,3 +40,9 @@ where
     pub(crate) depth: [Vec2; 3],
     pub(crate) data: [T; 3],
 }
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DrawTri {
+    pub draw_id: u32,
+    pub tri_id: u32,
+}

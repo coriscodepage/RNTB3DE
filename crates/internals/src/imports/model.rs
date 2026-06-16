@@ -30,7 +30,9 @@ impl Mul<f32> for MeshData {
 
 impl Lerp for MeshData {
     fn lerp(&self, other: &Self, t: f32) -> Self {
-        Self { texture_uv: self.texture_uv.lerp(other.texture_uv, t) }
+        Self {
+            texture_uv: self.texture_uv.lerp(other.texture_uv, t),
+        }
     }
 }
 
@@ -61,9 +63,13 @@ impl Model<MeshData> {
                     indices.push(tri0.next().unwrap().parse::<u32>().unwrap() - 1);
                     indices.push(tri1.next().unwrap().parse::<u32>().unwrap() - 1);
                     indices.push(tri2.next().unwrap().parse::<u32>().unwrap() - 1);
-                    texture_indices.push(tri0.next().unwrap().parse::<u32>().unwrap() - 1);
-                    texture_indices.push(tri1.next().unwrap().parse::<u32>().unwrap() - 1);
-                    texture_indices.push(tri2.next().unwrap().parse::<u32>().unwrap() - 1);
+                    if let (Some(a), Some(b), Some(c)) = (tri0.next(), tri1.next(), tri2.next()) {
+                        if !a.is_empty() && !b.is_empty() && !c.is_empty() {
+                            texture_indices.push(a.parse::<u32>().unwrap() - 1);
+                            texture_indices.push(b.parse::<u32>().unwrap() - 1);
+                            texture_indices.push(c.parse::<u32>().unwrap() - 1);
+                        }
+                    }
                 }
                 Some(c) if c == "vt" => {
                     let u: f32 = split.next().unwrap().parse().unwrap();
@@ -73,7 +79,8 @@ impl Model<MeshData> {
                 _ => {}
             }
         }
-        let verts = indices
+        let verts = if !texture_indices.is_empty() {
+            indices
             .iter()
             .zip(texture_indices.iter())
             .map(|(v, t)| {
@@ -84,7 +91,21 @@ impl Model<MeshData> {
                     },
                 )
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+        } else {
+            indices
+            .iter()
+            .map(|v| {
+                Vertex::new(
+                    vertices[*v as usize],
+                    MeshData {
+                        texture_uv: Vec2::new(f32::NAN, f32::NAN),
+                    },
+                )
+            })
+            .collect::<Vec<_>>()
+        };
+         
         Self {
             mesh: Mesh::new(verts, None),
         }

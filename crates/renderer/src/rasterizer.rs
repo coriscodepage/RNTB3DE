@@ -21,10 +21,6 @@ impl Rasterizer {
         tile: &Tile,
         mut callback: F,
     ) {
-        // let IVec2 { x: ax, y: ay } = Self::to_screen_space(triangle.position[0], width, height);
-        // let IVec2 { x: bx, y: by } = Self::to_screen_space(triangle.position[1], width, height);
-        // let IVec2 { x: cx, y: cy } = Self::to_screen_space(triangle.position[2], width, height);
-
         let IVec2 { x: ax, y: ay } = triangle.position[0];
         let IVec2 { x: bx, y: by } = triangle.position[1];
         let IVec2 { x: cx, y: cy } = triangle.position[2];
@@ -41,7 +37,7 @@ impl Rasterizer {
         );
         let tile_min = tile.min();
         let tile_max = tile.max();
-        let starting_pos = IVec2::new(bbminx.max(tile_min.x), bbminy.max(tile_min.y));
+        let starting_pos = IVec2::new(bbminx.max(tile_min.x), bbminy.max(tile_min.y)); // Using a starting pos with an edge fuction and not recalculating the baro every iter
         let mut w0_row =
             Self::edge_function(triangle.position[1], triangle.position[2], starting_pos);
         let mut w1_row =
@@ -66,9 +62,6 @@ impl Rasterizer {
             let mut w2 = w2_row;
             let mut x = bbminx.max(tile_min.x);
             while x <= bbmaxx.min(tile_max.x) {
-                // let alpha = Self::signed_triangle_area(x, y, bx, by, cx, cy) * inv_area;
-                // let beta = Self::signed_triangle_area(x, y, cx, cy, ax, ay) * inv_area;
-                // let gamma = Self::signed_triangle_area(x, y, ax, ay, bx, by) * inv_area;
                 let alpha = w0 as f32 * inv_area;
                 let beta = w1 as f32 * inv_area;
                 let gamma = w2 as f32 * inv_area;
@@ -82,7 +75,6 @@ impl Rasterizer {
                     let depth = triangle.depth[0].x * alpha
                         + triangle.depth[1].x * beta
                         + triangle.depth[2].x * gamma;
-                    // output.push(FragmentInput::new(UVec2::new(x as u32, y as u32), data));
                     (callback)(FragmentInput::new(IVec2::new(x, y), depth, data));
                 }
                 x += 1;

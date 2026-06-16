@@ -5,11 +5,11 @@ use std::{
 
 use crate::{
     datatypes::{FragmentInput, Triangle, Vertex},
-    framebuffer::{Framebuffer, TILE_SIZE, Tile, TileBin},
+    framebuffer::{Framebuffer, TILE_SIZE, Tile, TileBin, TilesInfo},
     lerp::Lerp,
     mesh::Mesh,
     rasterizer::Rasterizer,
-    renderer::Renderer,
+    renderer::{Renderer, morton},
 };
 use glam::{IVec2, Vec2, Vec3, Vec4};
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -110,18 +110,26 @@ where
         self.bin_triangles(framebuffer.get_tiles());
         let fragment_shader = &self.fragment_shader;
         self.bins.par_iter().for_each(|bin| {
+            let fb_ptr = fb_ptr as *mut Framebuffer; // Safety: This is whack
             for &index in &bin.indices {
                 Rasterizer::rasterize(&self.triangles[index], &bin.tile, |fragment| {
-                    let frag_color = fragment_shader(&fragment);
-                    let fb_ptr = fb_ptr as *mut Framebuffer; // Safety: This is whack
-                    unsafe {
-                        (*fb_ptr).write_fragment(
+                    if unsafe {
+                        (*fb_ptr).depth_test(
                             fragment.position.x,
                             fragment.position.y,
                             fragment.depth,
-                            frag_color,
                         )
-                    };
+                    } {
+                        let frag_color = fragment_shader(&fragment);
+                        unsafe {
+                            (*fb_ptr).write_fragment(
+                                fragment.position.x,
+                                fragment.position.y,
+                                fragment.depth,
+                                frag_color,
+                            )
+                        };
+                    }
                 });
             }
         });
@@ -156,82 +164,104 @@ where
     fn bin_triangles(
         &mut self,
         // triangles: &[Triangle<T>],
-        tiles: (&[Tile], &[usize]),
+        tiles: &TilesInfo,
         // screen_width: usize,
         // screen_height: usize,
     ) {
-        let (tiles, tile_list) = tiles;
-        if self.bins.len() < tile_list.len() {
+        let TilesInfo { cols, rows, tiles } = tiles;
+        // let (tiles, tile_list) = tiles;
+        if self.bins.len() < tiles.len() {
             self.bins
-                .extend((self.bins.len()..tile_list.len()).map(|i| TileBin {
+                .extend((self.bins.len()..tiles.len()).map(|i| TileBin {
                     tile: tiles[i],
                     indices: SmallVec::new(),
+                    morton_key: 0,
                 }));
         }
         for i in 0..self.bins.len() {
-            self.bins[i].tile = tiles[tile_list[i]];
+            self.bins[i].tile = tiles[i];
             self.bins[i].indices.clear();
+            self.bins[i].morton_key = morton(
+                tiles[i].min().x as u32 / TILE_SIZE.0 as u32,
+                tiles[i].min().y as u32 / TILE_SIZE.1 as u32,
+            );
         }
         // .collect();
         self.triangles.iter().enumerate().for_each(|(i, triangle)| {
-            // let IVec2 { x: ax, y: ay } =
-            //     Rasterizer::to_screen_space(triangle.position[0], screen_width, screen_height);
-            // let IVec2 { x: bx, y: by } =
-            //     Rasterizer::to_screen_space(triangle.position[1], screen_width, screen_height);
-            // let IVec2 { x: cx, y: cy } =
-            //     Rasterizer::to_screen_space(triangle.position[2], screen_width, screen_height);
-
-            let IVec2 { x: ax, y: ay } = triangle.position[0];
-            let IVec2 { x: bx, y: by } = triangle.position[1];
-            let IVec2 { x: cx, y: cy } = triangle.position[2];
+            let [
+                IVec2 { x: ax, y: ay },
+                IVec2 { x: bx, y: by },
+                IVec2 { x: cx, y: cy },
+            ] = triangle.position;
 
             let bb_min_x = min(min(ax, bx), cx);
             let bb_min_y = min(min(ay, by), cy);
             let bb_max_x = max(max(ax, bx), cx);
             let bb_max_y = max(max(ay, by), cy);
             let total_area = Self::signed_triangle_area(ax, ay, bx, by, cx, cy);
+            let (x_normal_a, y_normal_a) = (-(by - ay), bx - ax);
+            let (x_normal_b, y_normal_b) = (-(cy - by), cx - bx);
+            let (x_normal_c, y_normal_c) = (-(ay - cy), ax - cx);
+            let cols_min = (bb_min_x as usize / TILE_SIZE.0).max(0);
+            let cols_max = (bb_max_x as usize / TILE_SIZE.0).min(*cols - 1);
+            let rows_min = (bb_min_y as usize / TILE_SIZE.1).max(0);
+            let rows_max = (bb_max_y as usize / TILE_SIZE.1).min(*rows - 1);
             if total_area >= 1.0 {
-                for bin in self.bins.iter_mut() {
-                    let tile_min = bin.tile.min();
-                    let tile_max = bin.tile.max();
-                    if tile_max.x < bb_min_x
-                        || tile_min.x > bb_max_x
-                        || tile_max.y < bb_min_y
-                        || tile_min.y > bb_max_y
-                    {
-                        continue;
-                    }
+                for row in rows_min..=rows_max {
+                    for col in cols_min..=cols_max {
+                        let bin = &mut self.bins[row * cols + col];
+                        let tile_min = bin.tile.min();
+                        let tile_max = bin.tile.max();
+                        if tile_min.x <= bb_min_x
+                            && tile_max.x >= bb_max_x
+                            && tile_min.y <= bb_min_y
+                            && tile_max.y >= bb_max_y
+                        {
+                            bin.indices.push(i);
+                            continue;
+                        }
 
-                    if tile_min.x <= bb_min_x
-                        && tile_max.x >= bb_max_x
-                        && tile_min.y <= bb_max_y
-                        && tile_max.y >= bb_max_y
-                    {
+                        let a = Self::furthest_point(tile_min, tile_max, x_normal_a, y_normal_a);
+                        let b = Self::furthest_point(tile_min, tile_max, x_normal_b, y_normal_b);
+                        let c = Self::furthest_point(tile_min, tile_max, x_normal_c, y_normal_c);
+                        if Self::edge_function(triangle.position[0], triangle.position[1], a) < 0
+                            || Self::edge_function(triangle.position[1], triangle.position[2], b)
+                                < 0
+                            || Self::edge_function(triangle.position[2], triangle.position[0], c)
+                                < 0
+                        {
+                            continue;
+                        }
                         bin.indices.push(i);
-                        continue;
                     }
-
-                    let (x_normal_a, y_normal_a) = (-(by - ay), bx - ax);
-                    let (x_normal_b, y_normal_b) = (-(cy - by), cx - bx);
-                    let (x_normal_c, y_normal_c) = (-(ay - cy), ax - cx);
-                    let a = Self::furthest_point(tile_min, tile_max, x_normal_a, y_normal_a);
-                    let b = Self::furthest_point(tile_min, tile_max, x_normal_b, y_normal_b);
-                    let c = Self::furthest_point(tile_min, tile_max, x_normal_c, y_normal_c);
-                    if Self::edge_function(triangle.position[0], triangle.position[1], a) < 0
-                        || Self::edge_function(triangle.position[1], triangle.position[2], b) < 0
-                        || Self::edge_function(triangle.position[2], triangle.position[0], c) < 0
-                    {
-                        continue;
-                    }
-                    bin.indices.push(i);
                 }
             }
         });
         self.bins.retain(|b| !b.indices.is_empty());
-        self.bins.iter_mut().for_each(|b| b.indices.sort_unstable());
+        self.bins.sort_unstable_by_key(|v| v.morton_key);
+        // self.bins.iter_mut().for_each(|b| b.indices.sort_unstable());
         // dbg!(binned);
         // panic!();
         // binned
+    }
+
+    pub fn run_pixel<P>(&mut self, renderer: &mut Renderer, mut shader: P)
+    where
+        P: FnMut((i32, i32)) -> Vec4,
+    {
+        let Some(render_buffer) = self.render_buffer else {
+            panic!("No render buffer attached to the pipeline.");
+        };
+
+        let mut framebuffer = renderer.take_framebuffer(render_buffer);
+
+        for y in 0..framebuffer.height() {
+            for x in 0..framebuffer.width() {
+                let frag_color = shader((x, y));
+                unsafe { framebuffer.write_fragment(x, y, 1.0, frag_color) };
+            }
+        }
+        renderer.put_framebuffer(render_buffer, framebuffer);
     }
 
     #[inline]

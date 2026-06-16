@@ -63,6 +63,8 @@ impl Renderer {
                     let b: i32 = unsafe { (ba[i] * 255.0).to_int_unchecked() };
                     let combined = ((r as i32) << 16) + ((g as i32) << 8) + (b as i32);
                     unsafe { *out.get_unchecked_mut(i) = combined };
+                } else {
+                    unsafe { *out.get_unchecked_mut(i) = 0 };
                 }
             }
         }
@@ -79,4 +81,22 @@ impl Renderer {
                 .clear(Vec4::new(0.0, 0.0, 0.0, 0.0));
         }
     }
+}
+
+pub(crate) fn morton(mut x: u32, mut y: u32) -> u32 {
+    // TODO: Either expand the morton or do a bounds check before. Usize is 64 bit while x and y got restrictions well bellow that
+    // https://graphics.stanford.edu/~seander/bithacks.html#InterleaveBMN
+    // x and y must initially be less than 65536.
+
+    x = (x | (x << 8)) & 0x00FF00FF;
+    x = (x | (x << 4)) & 0x0F0F0F0F;
+    x = (x | (x << 2)) & 0x33333333;
+    x = (x | (x << 1)) & 0x55555555;
+
+    y = (y | (y << 8)) & 0x00FF00FF;
+    y = (y | (y << 4)) & 0x0F0F0F0F;
+    y = (y | (y << 2)) & 0x33333333;
+    y = (y | (y << 1)) & 0x55555555;
+
+    x | (y << 1)
 }

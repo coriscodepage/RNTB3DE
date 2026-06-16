@@ -2,3 +2,7 @@
 profile.json.gz
 *.zst
 perf.data*
+blam2.obj
+nefertiti.obj
+neferiti_deffuse.png
+teapot.obj
