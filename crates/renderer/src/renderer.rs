@@ -56,11 +56,12 @@ impl Renderer {
             let binding = self.framebuffers[id].read();
             let buffer = binding.as_ref().unwrap();
             let (ra, ga, ba, _, generation) = buffer.get_color();
+            let current_gen = buffer.current_generation();
             for i in 0..ra.len() {
-                if unsafe { *generation.get_unchecked(i) } == buffer.current_generation() {
-                    let r: i32 = unsafe { (ra[i] * 255.0).to_int_unchecked() };
-                    let g: i32 = unsafe { (ga[i] * 255.0).to_int_unchecked() };
-                    let b: i32 = unsafe { (ba[i] * 255.0).to_int_unchecked() };
+                if unsafe { *generation.get_unchecked(i) } == current_gen {
+                    let r: i32 = unsafe { (*ra.get_unchecked(i) * 255.0).to_int_unchecked() };
+                    let g: i32 = unsafe { (*ga.get_unchecked(i) * 255.0).to_int_unchecked() };
+                    let b: i32 = unsafe { (*ba.get_unchecked(i) * 255.0).to_int_unchecked() };
                     let combined = ((r as i32) << 16) + ((g as i32) << 8) + (b as i32);
                     unsafe { *out.get_unchecked_mut(i) = combined };
                 } else {

@@ -4,6 +4,7 @@ use std::{
 };
 
 use crate::{
+    abstraction::program::Program,
     datatypes::{FragmentInput, Triangle, Vertex},
     framebuffer::{Framebuffer, TILE_SIZE, Tile, TileBin, TilesInfo},
     lerp::Lerp,
@@ -18,9 +19,8 @@ use std::fmt::Debug;
 
 #[derive(Debug, Clone)]
 pub struct PipelineForward<T: Lerp + Send + Sync, VS, FS> {
-    vertex_shader: VS,
-    fragment_shader: FS,
-    render_buffer: Option<usize>,
+    program: Program<T, VS, FS>,
+    render_buffer: Vec<usize>,
     triangles: Vec<Triangle<T>>,
     bins: Vec<TileBin>,
     _marker: PhantomData<T>,
@@ -30,13 +30,12 @@ impl<T, VS, FS> PipelineForward<T, VS, FS>
 where
     T: Lerp + Copy + Debug + Send + Sync,
     VS: Fn(Vertex<T>) -> Vertex<T> + Send + Sync,
-    FS: Fn(&FragmentInput<T>) -> Vec4 + Send + Sync,
+    FS: Fn(&FragmentInput<T>) -> Vec4 + Send + Sync + Clone,
 {
-    pub fn new(vertex_shader: VS, fragment_shader: FS) -> Self {
+    pub fn new(program: Program<T, VS, FS>) -> Self {
         Self {
-            vertex_shader,
-            fragment_shader,
-            render_buffer: None,
+            program,
+            render_buffer: Vec::new(),
             _marker: PhantomData,
             triangles: Vec::with_capacity(1000), // FIXME: Just straight up guessing.
             bins: Vec::with_capacity(100),
@@ -44,31 +43,42 @@ where
     }
 
     pub fn attach_render_buffer(&mut self, buffer_id: usize) {
-        self.render_buffer = Some(buffer_id);
+        self.render_buffer.push(buffer_id);
     }
 
-    pub fn detach_render_buffer(&mut self) {
-        self.render_buffer = None;
+    pub fn detach_render_buffer(&mut self, buffer_id: usize) {
+        if let Some(i) = self.render_buffer.iter().position(|&p| p == buffer_id) {
+            self.render_buffer.remove(i);
+        }
     }
 
     pub fn assemble_and_run(&mut self, renderer: &mut Renderer, mesh: &Mesh<T>) {
-        let Some(render_buffer) = self.render_buffer else {
+        if self.render_buffer.is_empty() {
             panic!("No render buffer attached to the pipeline.");
         };
 
-        let mut framebuffer = renderer.take_framebuffer(render_buffer);
-        self.triangles.clear();
-        let screen_width = framebuffer.width();
-        let screen_height = framebuffer.height();
+        if self.render_buffer.len() != self.program.fragment().len() {
+            panic!("Render buffer count does not match shader count.");
+        }
 
+        let mut framebuffers = self
+            .render_buffer
+            .iter()
+            .map(|&b| renderer.take_framebuffer(b))
+            .collect::<Vec<_>>();
+        self.triangles.clear();
+        let screen_width = framebuffers.iter().map(|b| b.width()).min().unwrap_or(0);
+        let screen_height = framebuffers.iter().map(|b| b.height()).min().unwrap_or(0);
+
+        let vertex_shader = self.program.vertex();
         self.triangles.extend(
             mesh.positions
                 .chunks_exact(3)
                 .zip(mesh.data.chunks_exact(3))
                 .map(|(pos, data)| {
-                    let v0 = (self.vertex_shader)(Vertex::new(pos[0], data[0]));
-                    let v1 = (self.vertex_shader)(Vertex::new(pos[1], data[1]));
-                    let v2 = (self.vertex_shader)(Vertex::new(pos[2], data[2]));
+                    let v0 = vertex_shader(Vertex::new(pos[0], data[0]));
+                    let v1 = vertex_shader(Vertex::new(pos[1], data[1]));
+                    let v2 = vertex_shader(Vertex::new(pos[2], data[2]));
                     Triangle {
                         position: [
                             Self::to_screen_space(v0.position, screen_width, screen_height),
@@ -84,92 +94,53 @@ where
                     }
                 }),
         );
-        // .collect::<Vec<_>>();
-        // for triangle in triangles {
-        //     // let fragments =
-        //     Rasterizer::rasterize(
-        //         &triangle,
-        //         framebuffer.width(),
-        //         framebuffer.height(),
-        //         |fragment| {
-        //             let frag_color = (self.fragment_shader)(fragment);
-        //             unsafe {
-        //                 framebuffer.write_fragment(
-        //                     fragment.position.x as usize,
-        //                     fragment.position.y as usize,
-        //                     0.5, // dummy depth value
-        //                     frag_color,
-        //                 )
-        //             };
-        //         },
-        //     );
-        // }
 
-        let fb_ptr = (&mut framebuffer as *mut Framebuffer) as usize;
-
-        self.bin_triangles(framebuffer.get_tiles());
-        let fragment_shader = &self.fragment_shader;
+        self.bin_triangles(
+            framebuffers
+                .iter()
+                .find(|fb| fb.width() == screen_width && fb.height() == screen_height)
+                .unwrap()
+                .get_tiles(),
+        );
+        let fb_ptr = framebuffers
+            .iter_mut()
+            .map(|fb| (fb as *mut Framebuffer) as usize).collect::<Vec<_>>();
+        let fragment_shader = self.program.fragment();
         self.bins.par_iter().for_each(|bin| {
-            let fb_ptr = fb_ptr as *mut Framebuffer; // Safety: This is whack
             for &index in &bin.indices {
                 Rasterizer::rasterize(&self.triangles[index], &bin.tile, |fragment| {
-                    if unsafe {
-                        (*fb_ptr).depth_test(
-                            fragment.position.x,
-                            fragment.position.y,
-                            fragment.depth,
-                        )
-                    } {
-                        let frag_color = fragment_shader(&fragment);
-                        unsafe {
-                            (*fb_ptr).write_fragment(
+                    for (i, &fb_ptr) in fb_ptr.iter().enumerate() {
+                        if unsafe {
+                            (*(fb_ptr as *mut Framebuffer)).depth_test(
                                 fragment.position.x,
                                 fragment.position.y,
                                 fragment.depth,
-                                frag_color,
                             )
-                        };
+                        } {
+                            let frag_color = fragment_shader[i](&fragment);
+                            unsafe {
+                                (*(fb_ptr as *mut Framebuffer)).write_fragment(
+                                    fragment.position.x,
+                                    fragment.position.y,
+                                    fragment.depth,
+                                    frag_color,
+                                )
+                            };
+                        }
                     }
                 });
             }
         });
-        // .flatten()
-        // .collect::<Vec<_>>();
-        // for (pos, col) in rendered {
-        //     unsafe {
-        //         framebuffer.write_fragment(
-        //             pos.x as usize,
-        //             pos.y as usize,
-        //             0.5, // dummy depth value
-        //             col,
-        //         )
-        //     };
-        // }
-        // for triangle in &triangles {
-        //     Rasterizer::rasterize(triangle, screen_width, screen_height, |fragment| {
-        //         let frag_color = (self.fragment_shader)(fragment);
-        //         unsafe {
-        //             framebuffer.write_fragment(
-        //                 fragment.position.x as usize,
-        //                 fragment.position.y as usize,
-        //                 0.5, // dummy depth value
-        //                 frag_color,
-        //             )
-        //         };
-        //     });
-        // }
-        renderer.put_framebuffer(render_buffer, framebuffer);
+        for (&id, fb) in self.render_buffer.iter().zip(framebuffers) {
+            renderer.put_framebuffer(id, fb);
+        }
     }
 
     fn bin_triangles(
         &mut self,
-        // triangles: &[Triangle<T>],
         tiles: &TilesInfo,
-        // screen_width: usize,
-        // screen_height: usize,
     ) {
         let TilesInfo { cols, rows, tiles } = tiles;
-        // let (tiles, tile_list) = tiles;
         if self.bins.len() < tiles.len() {
             self.bins
                 .extend((self.bins.len()..tiles.len()).map(|i| TileBin {
@@ -186,7 +157,6 @@ where
                 tiles[i].min().y as u32 / TILE_SIZE.1 as u32,
             );
         }
-        // .collect();
         self.triangles.iter().enumerate().for_each(|(i, triangle)| {
             let [
                 IVec2 { x: ax, y: ay },
@@ -239,17 +209,13 @@ where
         });
         self.bins.retain(|b| !b.indices.is_empty());
         self.bins.sort_unstable_by_key(|v| v.morton_key);
-        // self.bins.iter_mut().for_each(|b| b.indices.sort_unstable());
-        // dbg!(binned);
-        // panic!();
-        // binned
     }
 
-    pub fn run_pixel<P>(&mut self, renderer: &mut Renderer, mut shader: P)
+    pub fn run_pixel<P>(&mut self, renderer: &mut Renderer, dest: usize, mut shader: P)
     where
         P: FnMut((i32, i32)) -> Vec4,
     {
-        let Some(render_buffer) = self.render_buffer else {
+        let Some(&render_buffer) = self.render_buffer.iter().find(|&&p| p == dest) else {
             panic!("No render buffer attached to the pipeline.");
         };
 
@@ -309,14 +275,14 @@ where
 mod tests {
     use super::*;
     use crate::{datatypes::Vertex, mesh::Mesh, renderer::Renderer};
-    use glam::{vec3, vec4, Vec4};
+    use glam::{Vec4, vec3, vec4};
 
     #[test]
     fn assemble_and_run_writes_the_rasterized_triangle() {
         let mut renderer = Renderer::new();
         let framebuffer_id = renderer.create_framebuffer(4, 4);
-
-        let mut pipeline = PipelineForward::new(|vertex: Vertex<Vec4>| vertex, |fragment| fragment.data);
+        let program = Program::new(|vertex: Vertex<Vec4>| vertex, &[|fragment| fragment.data]);
+        let mut pipeline = PipelineForward::new(program);
         pipeline.attach_render_buffer(framebuffer_id);
 
         let mesh = Mesh::new(
@@ -339,11 +305,11 @@ mod tests {
     fn run_pixel_writes_through_the_bound_framebuffer() {
         let mut renderer = Renderer::new();
         let framebuffer_id = renderer.create_framebuffer(2, 2);
-
-        let mut pipeline = PipelineForward::new(|vertex: Vertex<Vec4>| vertex, |fragment| fragment.data);
+        let program = Program::new(|vertex: Vertex<Vec4>| vertex, &[|fragment| fragment.data]);
+        let mut pipeline = PipelineForward::new(program);
         pipeline.attach_render_buffer(framebuffer_id);
 
-        pipeline.run_pixel(&mut renderer, |(x, y)| vec4(x as f32, y as f32, 0.25, 1.0));
+        pipeline.run_pixel(&mut renderer, 0, |(x, y)| vec4(x as f32, y as f32, 0.25, 1.0));
 
         let framebuffer = renderer.take_framebuffer(framebuffer_id);
         assert_eq!(framebuffer.read_pixel(0, 0), vec4(0.0, 0.0, 0.25, 1.0));

@@ -1,5 +1,6 @@
 use core::f32;
 use internals::imports::model::{MeshData, Model};
+use renderer::abstraction::program::Program;
 use renderer::dag::*;
 use renderer::datatypes::Vertex;
 use renderer::forward_pipeline::PipelineForward;
@@ -10,8 +11,8 @@ use std::fs::{self, File};
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
 
-static WIDTH: usize = 1920;
-static HEIGHT: usize = 1080;
+static WIDTH: usize = 800;
+static HEIGHT: usize = 600;
 
 pub fn main() {
     let sdl_context = sdl3::init().unwrap();
@@ -57,27 +58,27 @@ pub fn main() {
 
     let mut renderer = Renderer::new();
     let fb_id = renderer.create_framebuffer(WIDTH, HEIGHT);
-    let mut pipeline = PipelineForward::new(
+    let program = Program::new(
         |mut v: Vertex<MeshData>| {
-            let i = i.load(std::sync::atomic::Ordering::Relaxed);
-            let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
-            let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
-            let y_axis = glam::vec3(0.0, 1.0, 0.0);
-            let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
-            let rot = glam::mat3(x_axis, y_axis, z_axis);
+            // let i = i.load(std::sync::atomic::Ordering::Relaxed);
+            // let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
+            // let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
+            // let y_axis = glam::vec3(0.0, 1.0, 0.0);
+            // let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
+            // let rot = glam::mat3(x_axis, y_axis, z_axis);
 
-            let trans = glam::Mat4::from_translation(glam::vec3(0.0, 0.0, 0.0));
-            let p = glam::vec3(
-                v.position.x / (16.0 / 9.0),
-                v.position.y,
-                v.position.z / (16.0 / 9.0),
-            );
-            let v3 = 0.8 * rot * p;
-            let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
-            v.position = glam::vec3(v4.x, v4.y, v4.z);
+            // let trans = glam::Mat4::from_translation(glam::vec3(0.0, 0.0, 0.0));
+            // let p = glam::vec3(
+            //     v.position.x / (16.0 / 9.0),
+            //     v.position.y,
+            //     v.position.z / (16.0 / 9.0),
+            // );
+            // let v3 = 0.8 * rot * p;
+            // let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
+            // v.position = glam::vec3(v4.x, v4.y, v4.z);
             v
         },
-        |v| {
+        &[|v: &renderer::datatypes::FragmentInput<MeshData>| {
             let tex_x =
                 unsafe { (v.data.texture_uv.x * info.width as f32).to_int_unchecked::<usize>() };
             let tex_y =
@@ -86,84 +87,16 @@ pub fn main() {
             let color = texture[tex_idx];
             let [r, g, b] = color;
             glam::vec4(r, g, b, 1.0)
-        },
+        }],
     );
-
-    let mut pipeline2 = PipelineForward::new(
-        |mut v: Vertex<MeshData>| {
-            let i = i.load(std::sync::atomic::Ordering::Relaxed);
-            let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
-            let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
-            let y_axis = glam::vec3(0.0, 1.0, 0.0);
-            let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
-            let rot = glam::mat3(x_axis, y_axis, z_axis);
-
-            let trans = glam::Mat4::from_translation(glam::vec3(-0.60, -0.3, 0.0));
-            let p = glam::vec3(
-                v.position.x / (16.0 / 9.0),
-                v.position.y,
-                v.position.z / (16.0 / 9.0),
-            );
-            let v3 = 0.2 * rot * p;
-            let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
-            v.position = glam::vec3(v4.x, v4.y, v4.z);
-            v
-        },
-        |v| {
-            let i = i.load(std::sync::atomic::Ordering::Relaxed);
-            let hue = i % 720;
-            hsv_to_rgba(hue as f32 / 2.0, 1.0, 1.0)
-        },
-    );
-
-    let mut pipeline3 = PipelineForward::new(
-        |mut v: Vertex<MeshData>| {
-            let i = i.load(std::sync::atomic::Ordering::Relaxed);
-            let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
-            let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
-            let y_axis = glam::vec3(0.0, 1.0, 0.0);
-            let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
-            let rot = glam::mat3(x_axis, y_axis, z_axis);
-
-            let trans = glam::Mat4::from_translation(glam::vec3(0.60, 0.2, 0.0));
-            let p = glam::vec3(
-                v.position.x / (16.0 / 9.0),
-                v.position.y,
-                v.position.z / (16.0 / 9.0),
-            );
-            let v3 = 0.3 * rot * p;
-            let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
-            v.position = glam::vec3(v4.x, v4.y, v4.z);
-            v
-        },
-        |v| {
-            let tex_x =
-                unsafe { (v.data.texture_uv.x * info2.width as f32).to_int_unchecked::<usize>() };
-            let tex_y =
-                unsafe { (v.data.texture_uv.y * info2.height as f32).to_int_unchecked::<usize>() };
-            let tex_idx = tex_y * info2.width as usize + tex_x;
-            if tex_idx < texture2.len() {
-                let color = texture2[tex_idx];
-                let [r, g, b] = color;
-                glam::vec4(r, g, b, 1.0)
-            } else {
-                glam::vec4(0.0, 0.0, 0.0, 1.0)
-            }
-            // glam::vec4(1.0, 1.0,1.0,1.0)
-        },
-    );
+    let mut pipeline = PipelineForward::new(program);
 
     pipeline.attach_render_buffer(fb_id);
-    pipeline2.attach_render_buffer(fb_id);
-    pipeline3.attach_render_buffer(fb_id);
-
 
     let file = fs::read_to_string("african_head.obj").unwrap();
     let model1 = Model::from_obj_string(&file);
     let file = fs::read_to_string("teapot.obj").unwrap();
     let model2 = Model::from_obj_string(&file);
-    let file = fs::read_to_string("blam2.obj").unwrap();
-    let model3 = Model::from_obj_string(&file);
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -178,16 +111,13 @@ pub fn main() {
             }
         }
 
-
         renderer.clear_framebuffer(fb_id);
         pipeline.assemble_and_run(&mut renderer, &model1.mesh);
-        pipeline2.assemble_and_run(&mut renderer, &model2.mesh);
-        pipeline3.assemble_and_run(&mut renderer, &model3.mesh);
+        // pipeline2.assemble_and_run(&mut renderer, &model2.mesh);
         let mut win_surf = window.surface(&event_pump).unwrap();
         let pixels = unsafe { win_surf.without_lock_mut().unwrap() };
         renderer.buffer_to_u8(fb_id, bytemuck::cast_slice_mut(pixels));
         win_surf.update_window().unwrap();
-
 
         if second_start.elapsed() >= Duration::new(1, 0) {
             println!("FPS: {}", frames);
