@@ -57,17 +57,39 @@ impl Renderer {
             let buffer = binding.as_ref().unwrap();
             let (ra, ga, ba, _, generation) = buffer.get_color();
             let current_gen = buffer.current_generation();
-            for i in 0..ra.len() {
+            let mut i = 0;
+            while i < ra.len() {
                 if unsafe { *generation.get_unchecked(i) } == current_gen {
-                    let r: i32 = unsafe { (*ra.get_unchecked(i) * 255.0).to_int_unchecked() };
-                    let g: i32 = unsafe { (*ga.get_unchecked(i) * 255.0).to_int_unchecked() };
-                    let b: i32 = unsafe { (*ba.get_unchecked(i) * 255.0).to_int_unchecked() };
+                    let r: i32 = unsafe { (ra[i] * 255.0).to_int_unchecked() };
+                    let g: i32 = unsafe { (ga[i] * 255.0).to_int_unchecked() };
+                    let b: i32 = unsafe { (ba[i] * 255.0).to_int_unchecked() };
                     let combined = ((r as i32) << 16) + ((g as i32) << 8) + (b as i32);
                     unsafe { *out.get_unchecked_mut(i) = combined };
                 } else {
                     unsafe { *out.get_unchecked_mut(i) = 0 };
                 }
+                i += 1;
             }
+            // const CHUNK: usize = 4096;
+            // out.par_chunks_mut(CHUNK)
+            //     .zip(ra.par_chunks(CHUNK))
+            //     .zip(ga.par_chunks(CHUNK))
+            //     .zip(ba.par_chunks(CHUNK))
+            //     .zip(generation.par_chunks(CHUNK))
+            //     .for_each(|((((out_c, ra_c), ga_c), ba_c), gen_c)| {
+            //         for i in 0..out_c.len() {
+            //             unsafe {
+            //                 if *gen_c.get_unchecked(i) == current_gen {
+            //                     let r: i32 = (ra_c[i] * 255.0).to_int_unchecked();
+            //                     let g: i32 = (ga_c[i] * 255.0).to_int_unchecked();
+            //                     let b: i32 = (ba_c[i] * 255.0).to_int_unchecked();
+            //                     *out_c.get_unchecked_mut(i) = (r << 16) | (g << 8) | b;
+            //                 } else {
+            //                     *out_c.get_unchecked_mut(i) = 0;
+            //                 }
+            //             }
+            //         }
+            //     });
         }
     }
 
