@@ -1,6 +1,7 @@
 use std::{
     cmp::{max, min},
     marker::PhantomData,
+    mem::MaybeUninit,
 };
 
 use crate::{
@@ -16,8 +17,8 @@ use bumpalo::Bump;
 use glam::{IVec2, Vec2, Vec3, Vec4};
 use rayon::{
     iter::{
-        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator, ParallelExtend,
-        ParallelIterator,
+        IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+        IntoParallelRefMutIterator, ParallelExtend, ParallelIterator,
     },
     slice::ParallelSlice,
 };
@@ -68,6 +69,8 @@ impl PipelineForward {
             panic!("Render buffer count does not match shader count.");
         }
 
+        self.arena.reset();
+
         let mut framebuffers = self
             .render_buffer
             .iter()
@@ -77,29 +80,38 @@ impl PipelineForward {
         let screen_height = framebuffers.iter().map(|b| b.height()).min().unwrap_or(0);
 
         let vertex_shader = program.vertex();
-        let triangles: &mut [Triangle<T>] = self.arena.alloc_slice_fill_iter(
-            mesh.positions
-                .chunks_exact(3)
-                .zip(mesh.data.chunks_exact(3))
-                .map(|(pos, data)| {
-                    let v0 = vertex_shader(Vertex::new(pos[0], data[0]));
-                    let v1 = vertex_shader(Vertex::new(pos[1], data[1]));
-                    let v2 = vertex_shader(Vertex::new(pos[2], data[2]));
-                    Triangle {
-                        position: [
-                            Self::to_screen_space(v0.position, screen_width, screen_height),
-                            Self::to_screen_space(v1.position, screen_width, screen_height),
-                            Self::to_screen_space(v2.position, screen_width, screen_height),
-                        ],
-                        depth: [
-                            Vec2::new(v0.position.z, 1.0),
-                            Vec2::new(v1.position.z, 1.0),
-                            Vec2::new(v2.position.z, 1.0),
-                        ],
-                        data: [v0.data, v1.data, v2.data],
-                    }
-                }),
-        );
+        let triangles: &mut [MaybeUninit<Triangle<T>>] = self
+            .arena
+            .alloc_slice_fill_clone(mesh.positions.len() / 3, &MaybeUninit::uninit());
+        triangles
+            .par_iter_mut()
+            .zip(mesh.positions.par_chunks_exact(3))
+            .zip(mesh.data.par_chunks_exact(3))
+            .for_each(|((tri, pos), data)| {
+                let v0 = vertex_shader(Vertex::new(pos[0], data[0]));
+                let v1 = vertex_shader(Vertex::new(pos[1], data[1]));
+                let v2 = vertex_shader(Vertex::new(pos[2], data[2]));
+                tri.write(Triangle {
+                    position: [
+                        Self::to_screen_space(v0.position, screen_width, screen_height),
+                        Self::to_screen_space(v1.position, screen_width, screen_height),
+                        Self::to_screen_space(v2.position, screen_width, screen_height),
+                    ],
+                    depth: [
+                        Vec2::new(v0.position.z, 1.0),
+                        Vec2::new(v1.position.z, 1.0),
+                        Vec2::new(v2.position.z, 1.0),
+                    ],
+                    data: [v0.data, v1.data, v2.data],
+                });
+            });
+
+        let triangles: &mut [Triangle<T>] = unsafe {
+            std::slice::from_raw_parts_mut(
+                triangles.as_mut_ptr() as *mut Triangle<T>,
+                triangles.len(),
+            )
+        };
 
         Self::bin_triangles(
             &mut self.bins,
@@ -108,12 +120,13 @@ impl PipelineForward {
                 .find(|fb| fb.width() == screen_width && fb.height() == screen_height)
                 .unwrap()
                 .get_tiles(),
-                triangles
+            triangles,
         );
-        let fb_ptr = framebuffers
-            .iter_mut()
-            .map(|fb| (fb as *mut Framebuffer) as usize)
-            .collect::<Vec<_>>();
+        let fb_ptr = self.arena.alloc_slice_fill_iter(
+            framebuffers
+                .iter_mut()
+                .map(|fb| (fb as *mut Framebuffer) as usize),
+        );
         let fragment_shader = program.fragment();
         self.bins.par_iter().for_each(|bin| {
             for &index in &bin.indices {
@@ -145,19 +158,18 @@ impl PipelineForward {
         }
     }
 
-    fn bin_triangles<T: Lerp + Copy + Debug + Send + Sync>(
+    pub fn bin_triangles<T: Lerp + Copy + Debug + Send + Sync>(
         bins: &mut Vec<TileBin>,
         tiles: &TilesInfo,
         triangles: &[Triangle<T>],
     ) {
         let TilesInfo { cols, rows, tiles } = tiles;
         if bins.len() < tiles.len() {
-            bins
-                .extend((bins.len()..tiles.len()).map(|i| TileBin {
-                    tile: tiles[i],
-                    indices: SmallVec::new(),
-                    morton_key: 0,
-                }));
+            bins.extend((bins.len()..tiles.len()).map(|i| TileBin {
+                tile: tiles[i],
+                indices: SmallVec::new(),
+                morton_key: 0,
+            }));
         }
         for i in 0..bins.len() {
             bins[i].tile = tiles[i];
@@ -178,7 +190,7 @@ impl PipelineForward {
             let bb_min_y = min(min(ay, by), cy);
             let bb_max_x = max(max(ax, bx), cx);
             let bb_max_y = max(max(ay, by), cy);
-            let total_area = Self::signed_triangle_area(ax, ay, bx, by, cx, cy);
+            let total_area = Self::signed_triangle_area_wrong(ax, ay, bx, by, cx, cy);
             let (x_normal_a, y_normal_a) = (-(by - ay), bx - ax);
             let (x_normal_b, y_normal_b) = (-(cy - by), cx - bx);
             let (x_normal_c, y_normal_c) = (-(ay - cy), ax - cx);
@@ -186,7 +198,7 @@ impl PipelineForward {
             let cols_max = (bb_max_x as usize / TILE_SIZE.0).min(*cols - 1);
             let rows_min = (bb_min_y as usize / TILE_SIZE.1).max(0);
             let rows_max = (bb_max_y as usize / TILE_SIZE.1).min(*rows - 1);
-            if total_area >= 1.0 {
+            if total_area >= 2.0 {
                 for row in rows_min..=rows_max {
                     for col in cols_min..=cols_max {
                         let bin = &mut bins[row * cols + col];
@@ -276,9 +288,8 @@ impl PipelineForward {
     }
 
     #[inline(always)]
-    fn signed_triangle_area(ax: i32, ay: i32, bx: i32, by: i32, cx: i32, cy: i32) -> f32 {
-        return 0.5
-            * ((by - ay) * (bx + ax) + (cy - by) * (cx + bx) + (ay - cy) * (ax + cx)) as f32;
+    fn signed_triangle_area_wrong(ax: i32, ay: i32, bx: i32, by: i32, cx: i32, cy: i32) -> f32 {
+        return ((by - ay) * (bx + ax) + (cy - by) * (cx + bx) + (ay - cy) * (ax + cx)) as f32;
     }
 
     #[inline(always)]

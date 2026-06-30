@@ -41,7 +41,7 @@ where
     pub(crate) data: [T; 3],
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DrawTri {
     pub draw_id: u32,
     pub tri_id: u32,
