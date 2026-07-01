@@ -8,3 +8,4 @@ pub mod datatypes;
 pub mod dag;
 pub mod vbr;
 pub mod abstraction;
+pub mod texture;

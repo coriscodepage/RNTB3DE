@@ -2,6 +2,7 @@ use glam::{IVec2, Vec2, Vec4, vec4};
 use smallvec::SmallVec;
 
 pub static TILE_SIZE: (usize, usize) = (64, 64);
+pub static MAX_BINDS: usize = 16;
 
 pub struct Framebuffer {
     r: Vec<f32>,

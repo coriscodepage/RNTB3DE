@@ -7,8 +7,10 @@ edition = "2024"
 approx = "0.5.1"
 bumpalo = { version = "3.20.2", features = ["collections"] }
 glam = { version = "0.33.0", features = ["fast-math", "approx"] }
-itertools = "0.14.0"
+itertools = "0.15.0"
 rayon = "1.12.0"
 wide = "1.4.0"
 smallvec = "1.15.1"
 parking_lot = "0.12.5"
+arrayvec = "0.7.7"
+png = "0.18.1"

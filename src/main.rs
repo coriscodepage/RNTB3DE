@@ -1,21 +1,24 @@
 use core::f32;
 use internals::imports::model::{MeshData, Model};
+use renderer::abstraction::context::Context;
 use renderer::abstraction::program::Program;
 use renderer::dag::*;
 use renderer::datatypes::Vertex;
 use renderer::forward_pipeline::PipelineForward;
 use renderer::renderer::Renderer;
+use renderer::texture::Texture;
 use sdl3::event::Event;
 use sdl3::keyboard::Keycode;
+use std::cell::RefCell;
 use std::fs::{self, File};
+use std::path::Path;
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
 
-static WIDTH: usize = 1920;//1280;
-static HEIGHT: usize = 1080;//720;
-
+static WIDTH: usize = 1280;
+static HEIGHT: usize = 720;
 //  pub fn main() {
-    
+
 //  }
 
 pub fn main() {
@@ -30,38 +33,19 @@ pub fn main() {
     let mut second_start = Instant::now();
     let mut frames = 0;
 
-    let decoder = png::Decoder::new(std::io::BufReader::new(
-        File::open("african_head_diffuse.png").unwrap(),
-    ));
-
     let i = AtomicI32::new(0);
 
-    let mut reader = decoder.read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut buf).unwrap();
-    let binding = buf[..info.buffer_size()]
-        .iter()
-        .copied()
-        .map(|c| c as f32 / 255.0)
-        .collect::<Vec<f32>>();
-    let texture: &[[f32; 3]] = bytemuck::cast_slice(&binding);
+    let texture = Texture::from_png("african_head_diffuse.png");
 
-    let decoder2 = png::Decoder::new(std::io::BufReader::new(
-        File::open("neferiti_deffuse.png").unwrap(),
-    ));
-
-    let mut reader2 = decoder2.read_info().unwrap();
-    let mut buf2 = vec![0; reader2.output_buffer_size().unwrap()];
-    let info2 = reader2.next_frame(&mut buf2).unwrap();
-    let binding2 = buf2[..info2.buffer_size()]
-        .iter()
-        .copied()
-        .map(|c| c as f32 / 255.0)
-        .collect::<Vec<f32>>();
-    let texture2: &[[f32; 3]] = bytemuck::cast_slice(&binding2);
+    let texture2 = Texture::from_png("neferiti_deffuse.png");
 
     let mut renderer = Renderer::new();
+    
+    let tex_id_1 = renderer.insert_texture(texture);
+    let tex_id_2 = renderer.insert_texture(texture2);
+
     let fb_id = renderer.create_framebuffer(WIDTH, HEIGHT);
+
     let program = Program::new(
         |mut v: Vertex<MeshData>| {
             let i = i.load(std::sync::atomic::Ordering::Relaxed);
@@ -82,19 +66,13 @@ pub fn main() {
             v.position = glam::vec3(v4.x, v4.y, v4.z);
             v
         },
-        &[|v: &renderer::datatypes::FragmentInput<MeshData>| {
-            let tex_x =
-                unsafe { (v.data.texture_uv.x * info.width as f32).to_int_unchecked::<usize>() };
-            let tex_y =
-                unsafe { (v.data.texture_uv.y * info.height as f32).to_int_unchecked::<usize>() };
-            let tex_idx = tex_y * info.width as usize + tex_x;
-            let color = texture[tex_idx];
-            let [r, g, b] = color;
-            glam::vec4(r, g, b, 1.0)
+        &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
+            let color = ctx.sample_texture(0, v.data.texture_uv.x, v.data.texture_uv.y);
+            color
         }],
     );
 
-        let program2 = Program::new(
+    let program2 = Program::new(
         |mut v: Vertex<MeshData>| {
             let i = i.load(std::sync::atomic::Ordering::Relaxed);
             let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
@@ -114,30 +92,24 @@ pub fn main() {
             v.position = glam::vec3(v4.x, v4.y, v4.z);
             v
         },
-        &[|v: &renderer::datatypes::FragmentInput<MeshData>| {
-            let tex_x =
-                unsafe { (v.data.texture_uv.x * info2.width as f32).to_int_unchecked::<usize>() };
-            let tex_y =
-                unsafe { (v.data.texture_uv.y * info2.height as f32).to_int_unchecked::<usize>() };
-            let tex_idx = tex_y * info2.width as usize + tex_x;
-            if tex_idx < texture2.len() {
-                let color = texture2[tex_idx];
-                let [r, g, b] = color;
-                glam::vec4(r, g, b, 1.0)
-            } else {
-                glam::vec4(1.0, 1.0, 1.0, 1.0)
-            }
-            // glam::vec4(1.0, 1.0,1.0, 1.0)
+        &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
+            let color = ctx.sample_texture_fail_silent(1, v.data.texture_uv.x, v.data.texture_uv.y);
+            color
         }],
     );
     let mut pipeline = PipelineForward::new();
 
-    pipeline.attach_render_buffer(fb_id);
-
+    let renderer = RefCell::new(renderer);
     let file = fs::read_to_string("african_head.obj").unwrap();
     let model1 = Model::from_obj_string(&file);
     let file = fs::read_to_string("blam2.obj").unwrap();
     let model2 = Model::from_obj_string(&file);
+    
+    let mut context = Context::new(&renderer);
+    context.bind_framebuffers_write(fb_id).unwrap();
+    context.bind_texture(tex_id_1);
+    context.bind_texture(tex_id_2);
+
     'running: loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -152,16 +124,20 @@ pub fn main() {
             }
         }
 
-        renderer.clear_framebuffer(fb_id);
-        pipeline.assemble_and_run(&mut renderer, &program, &model1.mesh);
-        pipeline.assemble_and_run(&mut renderer, &program2, &model2.mesh);
+        renderer.borrow_mut().clear_framebuffer(fb_id);
+
+        pipeline.assemble_and_run(&mut context, &program, &model1.mesh);
+        pipeline.assemble_and_run(&mut context, &program2, &model2.mesh);
+
         // pipeline2.run_pixel(&mut renderer, |a| {
         //     let c = texture[((a.0 + a.1 * info.width as i32) as usize).min(texture.len() - 1)];
         //     glam::vec4(c[0], c[1], c[2], 1.0)
         // });
         let mut win_surf = window.surface(&event_pump).unwrap();
         let pixels = unsafe { win_surf.without_lock_mut().unwrap() };
-        renderer.buffer_to_u8(fb_id, bytemuck::cast_slice_mut(pixels));
+        renderer
+            .borrow()
+            .buffer_to_u8(fb_id, bytemuck::cast_slice_mut(pixels));
         win_surf.update_window().unwrap();
 
         if second_start.elapsed() >= Duration::new(1, 0) {

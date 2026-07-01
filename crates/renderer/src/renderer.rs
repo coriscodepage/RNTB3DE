@@ -2,30 +2,40 @@ use bumpalo::Bump;
 use glam::Vec4;
 use parking_lot::RwLock;
 
-use crate::framebuffer::Framebuffer;
+use crate::{framebuffer::Framebuffer, texture::Texture};
 
 pub struct Renderer {
-    framebuffers: Vec<RwLock<Option<Framebuffer>>>,
+    framebuffers: Vec<Option<Framebuffer>>,
+    textures: Vec<Option<Texture>>,
 }
 
 impl Renderer {
     pub fn new() -> Self {
         Self {
             framebuffers: Vec::new(),
+            textures: Vec::new(),
         }
     }
 
     pub fn create_framebuffer(&mut self, width: usize, height: usize) -> usize {
         let fb = Framebuffer::new(width, height);
-        self.framebuffers.push(RwLock::new(Some(fb)));
+        self.framebuffers.push(Some(fb));
         self.framebuffers.len() - 1
     }
 
     pub(crate) fn take_framebuffer(&mut self, id: usize) -> Framebuffer {
         if id >= self.framebuffers.len() {
+            panic!("Invalid framebuffer ID: {}", id); // FIXME: This does not check anything!!!!!!!
+        } else {
+            self.framebuffers[id].take().unwrap()
+        }
+    }
+
+    pub(crate) fn borrow_framebuffer(&self, id: usize) -> &Framebuffer {
+        if id >= self.framebuffers.len() {
             panic!("Invalid framebuffer ID: {}", id);
         } else {
-            self.framebuffers[id].write().take().unwrap()
+            self.framebuffers[id].as_ref().unwrap()
         }
     }
 
@@ -33,18 +43,45 @@ impl Renderer {
         if id >= self.framebuffers.len() {
             panic!("Invalid framebuffer ID: {}", id);
         } else {
-            Framebuffer::new(
-                self.framebuffers[id].read().as_ref().unwrap().width() as usize,
-                self.framebuffers[id].read().as_ref().unwrap().height() as usize,
-            )
+            let fb = self.framebuffers[id].as_ref().unwrap();
+            Framebuffer::new(fb.width() as usize, fb.height() as usize)
         }
     }
 
     pub(crate) fn put_framebuffer(&mut self, id: usize, fb: Framebuffer) {
         if id < self.framebuffers.len() {
-            *self.framebuffers[id].write() = Some(fb);
+            self.framebuffers[id] = Some(fb);
         } else {
             panic!("Invalid framebuffer ID: {}", id);
+        }
+    }
+
+    pub fn insert_texture(&mut self, tex: Texture) -> usize {
+        self.textures.push(Some(tex));
+        self.textures.len() - 1
+    }
+
+    pub(crate) fn take_texture(&mut self, id: usize) -> Texture {
+        if id >= self.textures.len() {
+            panic!("Invalid texture ID: {}", id);
+        } else {
+            self.textures[id].take().unwrap()
+        }
+    }
+
+    pub(crate) fn borrow_texture(&self, id: usize) -> &Texture {
+        if id >= self.textures.len() {
+            panic!("Invalid texture ID: {}", id);
+        } else {
+            self.textures[id].as_ref().unwrap()
+        }
+    }
+
+    pub(crate) fn put_texturte(&mut self, id: usize, tex: Texture) {
+        if id < self.textures.len() {
+            self.textures[id] = Some(tex);
+        } else {
+            panic!("Invalid texture ID: {}", id);
         }
     }
 
@@ -53,8 +90,7 @@ impl Renderer {
         if id >= self.framebuffers.len() {
             panic!("Invalid framebuffer ID: {}", id);
         } else {
-            let binding = self.framebuffers[id].read();
-            let buffer = binding.as_ref().unwrap();
+            let buffer = self.framebuffers[id].as_ref().unwrap();
             let (ra, ga, ba, _, generation) = buffer.get_color();
             let current_gen = buffer.current_generation();
             let mut i = 0;
@@ -98,7 +134,6 @@ impl Renderer {
             panic!("Invalid framebuffer ID: {}", id);
         } else {
             self.framebuffers[id]
-                .write()
                 .as_mut()
                 .unwrap()
                 .clear(Vec4::new(0.0, 0.0, 0.0, 0.0));
