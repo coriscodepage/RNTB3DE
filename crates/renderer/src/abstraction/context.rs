@@ -74,8 +74,9 @@ impl<'a, const COUNT: usize> Context<'a, COUNT> {
                 }));
         });
 
-        self.texture_binds.iter().enumerate().for_each(|(i, id)| {
-            self.textures_resolved.push(Ref::map(self.renderer.borrow(), |r| r.borrow_texture(*id)))
+        self.texture_binds.iter().for_each(|id| {
+            self.textures_resolved
+                .push(Ref::map(self.renderer.borrow(), |r| r.borrow_texture(*id)))
         });
     }
 
@@ -92,17 +93,13 @@ impl<'a, const COUNT: usize> Context<'a, COUNT> {
         self.framebuffer_write_binds.len()
     }
 
+    #[inline]
     pub fn sample_texture(&self, id: usize, u: f32, v: f32) -> Vec4 {
-        if id > self.texture_binds.len() {
-            panic!("Texture index out of bounds")
-        }
         self.textures_resolved[id].sample(u, v)
     }
 
+    #[inline]
     pub fn sample_texture_fail_silent(&self, id: usize, u: f32, v: f32) -> Vec4 {
-        if id > self.texture_binds.len() {
-            panic!("Texture index out of bounds")
-        }
         self.textures_resolved[id].sample_fail_silent(u, v)
     }
 }

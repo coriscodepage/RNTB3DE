@@ -5,10 +5,7 @@ pub static TILE_SIZE: (usize, usize) = (64, 64);
 pub static MAX_BINDS: usize = 16;
 
 pub struct Framebuffer {
-    r: Vec<f32>,
-    g: Vec<f32>,
-    b: Vec<f32>,
-    a: Vec<f32>,
+    color: Vec<Vec4>,
     depth: Vec<f32>,
     width: i32,
     height: i32,
@@ -39,10 +36,7 @@ impl Framebuffer {
         }
         let tiles = TilesInfo { cols, rows, tiles };
         Self {
-            r: vec![0.0; width * height],
-            g: vec![0.0; width * height],
-            b: vec![0.0; width * height],
-            a: vec![0.0; width * height],
+            color: vec![Vec4::default(); width * height],
             depth: vec![f32::INFINITY; width * height],
             width: width as i32,
             height: height as i32,
@@ -104,10 +98,11 @@ impl Framebuffer {
         let index = unsafe { y.unchecked_mul(self.width).unchecked_add(x) as usize };
         // if depth < self.depth[index] {
         unsafe { *self.depth.get_unchecked_mut(index) = depth };
-        unsafe { *self.r.get_unchecked_mut(index) = color.x };
-        unsafe { *self.g.get_unchecked_mut(index) = color.y };
-        unsafe { *self.b.get_unchecked_mut(index) = color.z };
-        unsafe { *self.a.get_unchecked_mut(index) = color.w };
+        unsafe { *self.color.get_unchecked_mut(index) = color };
+        // unsafe { *self.r.get_unchecked_mut(index) = color.x };
+        // unsafe { *self.g.get_unchecked_mut(index) = color.y };
+        // unsafe { *self.b.get_unchecked_mut(index) = color.z };
+        // unsafe { *self.a.get_unchecked_mut(index) = color.w };
         unsafe { *self.generation.get_unchecked_mut(index) = self.current_generation };
         // }
     }
@@ -122,14 +117,8 @@ impl Framebuffer {
         }
     }
 
-    pub fn get_color(&self) -> (&Vec<f32>, &Vec<f32>, &Vec<f32>, &Vec<f32>, &Vec<u32>) {
-        (
-            self.r.as_ref(),
-            self.g.as_ref(),
-            self.b.as_ref(),
-            self.a.as_ref(),
-            self.generation.as_ref(),
-        )
+    pub fn get_color(&self) -> (&[Vec4], &[u32]) {
+        (self.color.as_ref(), self.generation.as_ref())
     }
 
     pub fn read_pixel(&self, x: i32, y: i32) -> Vec4 {
@@ -137,7 +126,7 @@ impl Framebuffer {
         if self.generation[index] != self.current_generation {
             vec4(0.0, 0.0, 0.0, 1.0)
         } else {
-            vec4(self.r[index], self.g[index], self.b[index], self.a[index])
+            self.color[index]
         }
     }
 
@@ -176,16 +165,16 @@ pub struct TilesInfo {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct TileBin {
+pub struct TileBin<'a> {
     pub(crate) tile: Tile,
-    pub(crate) indices: SmallVec<[usize; 8]>,
+    pub(crate) indices: &'a [usize],
     pub(crate) morton_key: u32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::{vec4, IVec2};
+    use glam::{IVec2, vec4};
 
     #[test]
     fn clear_resets_visible_state_via_generation() {

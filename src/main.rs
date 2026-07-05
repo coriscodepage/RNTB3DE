@@ -68,6 +68,8 @@ pub fn main() {
         },
         &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
             let color = ctx.sample_texture(0, v.data.texture_uv.x, v.data.texture_uv.y);
+            // let color = texture.sample(v.data.texture_uv.x, v.data.texture_uv.y);
+            // let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
             color
         }],
     );
@@ -94,6 +96,7 @@ pub fn main() {
         },
         &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
             let color = ctx.sample_texture_fail_silent(1, v.data.texture_uv.x, v.data.texture_uv.y);
+            // let color = texture2.sample_fail_silent(v.data.texture_uv.x, v.data.texture_uv.y);
             color
         }],
     );

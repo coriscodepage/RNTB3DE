@@ -6,7 +6,7 @@ use std::{
 
 use glam::{IVec2, UVec2, Vec3};
 use itertools::iproduct;
-use wide::{f32x4, i32x4};
+use wide::{CmpGe, bytemuck::Zeroable, f32x4, i32x4};
 
 use crate::{
     datatypes::{FragmentInput, Triangle},
@@ -24,6 +24,10 @@ impl Rasterizer {
         let IVec2 { x: ax, y: ay } = triangle.position[0];
         let IVec2 { x: bx, y: by } = triangle.position[1];
         let IVec2 { x: cx, y: cy } = triangle.position[2];
+
+        let depth_a_wide = wide::f32x4::splat(triangle.depth[0].x);
+        let depth_b_wide = wide::f32x4::splat(triangle.depth[1].x);
+        let depth_c_wide = wide::f32x4::splat(triangle.depth[2].x);
 
         let bbminx = min(min(ax, bx), cx); // bounding box for the triangle
         let bbminy = min(min(ay, by), cy); // defined by its top left and bottom right corners
@@ -52,35 +56,84 @@ impl Rasterizer {
         let delta_2x = -(by - ay);
         let delta_2y = bx - ax;
 
+        let delta_0x_wide = wide::i32x4::splat(delta_0x * 4);
+        let delta_1x_wide = wide::i32x4::splat(delta_1x * 4);
+        let delta_2x_wide = wide::i32x4::splat(delta_2x * 4);
+
         let inv_area = 1.0 / total_area as f32;
+        let inv_area_wide = wide::f32x4::splat(inv_area);
+
         // let mut output = Vec::new();
 
         let mut y = bbminy.max(tile_min.y);
         while y <= bbmaxy.min(tile_max.y) {
-            let mut w0 = w0_row;
-            let mut w1 = w1_row;
-            let mut w2 = w2_row;
+            // let mut w0 = w0_row;
+            // let mut w1 = w1_row;
+            // let mut w2 = w2_row;
+            let mut w0_wide = wide::i32x4::from([
+                w0_row,
+                w0_row + delta_0x,
+                w0_row + delta_0x * 2,
+                w0_row + delta_0x * 3,
+            ]);
+            let mut w1_wide = wide::i32x4::from([
+                w1_row,
+                w1_row + delta_1x,
+                w1_row + delta_1x * 2,
+                w1_row + delta_1x * 3,
+            ]);
+            let mut w2_wide = wide::i32x4::from([
+                w2_row,
+                w2_row + delta_2x,
+                w2_row + delta_2x * 2,
+                w2_row + delta_2x * 3,
+            ]);
+            let wide_zero = wide::f32x4::zeroed();
             let mut x = bbminx.max(tile_min.x);
             while x <= bbmaxx.min(tile_max.x) {
-                let alpha = w0 as f32 * inv_area;
-                let beta = w1 as f32 * inv_area;
-                let gamma = w2 as f32 * inv_area;
-                if alpha >= 0.0 && beta >= 0.0 && gamma >= 0.0 {
-                    // if x >= width as i32 || y >= height as i32 {
-                    //     continue;
-                    // }
-                    let data = triangle.data[0] * alpha
-                        + triangle.data[1] * beta
-                        + triangle.data[2] * gamma;
-                    let depth = triangle.depth[0].x * alpha
-                        + triangle.depth[1].x * beta
-                        + triangle.depth[2].x * gamma;
-                    (callback)(FragmentInput::new(IVec2::new(x, y), depth, data));
+                // let alpha = w0 as f32 * inv_area;
+                // let beta = w1 as f32 * inv_area;
+                // let gamma = w2 as f32 * inv_area;
+                let alpha_wide = w0_wide.round_float() * inv_area_wide;
+                let beta_wide = w1_wide.round_float() * inv_area_wide;
+                let gamma_wide = w2_wide.round_float() * inv_area_wide;
+
+                let inside = alpha_wide.simd_ge(wide_zero)
+                    & beta_wide.simd_ge(wide_zero)
+                    & gamma_wide.simd_ge(wide_zero);
+                // if alpha >= 0.0 && beta >= 0.0 && gamma >= 0.0 {
+                // if x >= width as i32 || y >= height as i32 {
+                //     continue;
+                // }
+                if inside.to_bitmask() != 0 {
+                    let depth_wide = depth_a_wide * alpha_wide + depth_b_wide * beta_wide + depth_c_wide * gamma_wide;
+                    for lane in 0..4 {
+                        let px = x + lane as i32;
+                        if px > bbmaxx.min(tile_max.x) {
+                            break;
+                        } else if inside.to_bitmask() & (1 << lane) == 0 {
+                            continue;
+                        }
+                        let alpha = alpha_wide.as_array()[lane];
+                        let beta = beta_wide.as_array()[lane];
+                        let gamma = gamma_wide.as_array()[lane];
+                        let data = triangle.data[0] * alpha
+                            + triangle.data[1] * beta
+                            + triangle.data[2] * gamma;
+                        let depth = depth_wide.as_array()[lane];
+                        // let depth = triangle.depth[0].x * alpha
+                        //     + triangle.depth[1].x * beta
+                        //     + triangle.depth[2].x * gamma;
+                        (callback)(FragmentInput::new(IVec2::new(px, y), depth, data));
+                    }
                 }
-                x += 1;
-                w0 += delta_0x;
-                w1 += delta_1x;
-                w2 += delta_2x;
+                x += 4;
+                w0_wide += delta_0x_wide;
+                w1_wide += delta_1x_wide;
+                w2_wide += delta_2x_wide;
+                // w0 += delta_0x;
+                // w1 += delta_1x;
+                // w2 += delta_2x;
             }
             y += 1;
             w0_row += delta_0y;
@@ -138,12 +191,16 @@ impl Rasterizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::{vec4, Vec2, Vec4};
+    use glam::{Vec2, Vec4, vec4};
 
     fn test_triangle() -> Triangle<Vec4> {
         Triangle {
             position: [IVec2::new(0, 0), IVec2::new(3, 0), IVec2::new(0, 3)],
-            depth: [Vec2::new(0.2, 0.0), Vec2::new(0.4, 0.0), Vec2::new(0.6, 0.0)],
+            depth: [
+                Vec2::new(0.2, 0.0),
+                Vec2::new(0.4, 0.0),
+                Vec2::new(0.6, 0.0),
+            ],
             data: [
                 vec4(1.0, 0.0, 0.0, 1.0),
                 vec4(0.0, 1.0, 0.0, 1.0),

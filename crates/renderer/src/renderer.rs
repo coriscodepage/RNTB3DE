@@ -1,6 +1,11 @@
 use bumpalo::Bump;
 use glam::Vec4;
 use parking_lot::RwLock;
+use rayon::{
+    iter::{IndexedParallelIterator, ParallelIterator},
+    slice::{ParallelSlice, ParallelSliceMut},
+};
+use wide::bytemuck;
 
 use crate::{framebuffer::Framebuffer, texture::Texture};
 
@@ -91,38 +96,35 @@ impl Renderer {
             panic!("Invalid framebuffer ID: {}", id);
         } else {
             let buffer = self.framebuffers[id].as_ref().unwrap();
-            let (ra, ga, ba, _, generation) = buffer.get_color();
+            let (color, generation) = buffer.get_color();
             let current_gen = buffer.current_generation();
-            let mut i = 0;
-            while i < ra.len() {
-                if unsafe { *generation.get_unchecked(i) } == current_gen {
-                    let r: i32 = unsafe { (ra[i] * 255.0).to_int_unchecked() };
-                    let g: i32 = unsafe { (ga[i] * 255.0).to_int_unchecked() };
-                    let b: i32 = unsafe { (ba[i] * 255.0).to_int_unchecked() };
-                    let combined = ((r as i32) << 16) + ((g as i32) << 8) + (b as i32);
+            let conv = wide::f32x4::from([
+                255.0 * (1 << 16) as f32,
+                255.0 * (1 << 8) as f32,
+                255.0,
+                0.0,
+            ]);
+            for (i, (color, &generation)) in color.iter().zip(generation).enumerate() {
+                if generation == current_gen {
+                    let color = wide::f32x4::from(color.to_array()) * conv;
+                    let combined = bytemuck::cast(color.fast_round_int().reduce_add());
                     unsafe { *out.get_unchecked_mut(i) = combined };
                 } else {
                     unsafe { *out.get_unchecked_mut(i) = 0 };
                 }
-                i += 1;
             }
             // const CHUNK: usize = 4096;
             // out.par_chunks_mut(CHUNK)
-            //     .zip(ra.par_chunks(CHUNK))
-            //     .zip(ga.par_chunks(CHUNK))
-            //     .zip(ba.par_chunks(CHUNK))
+            //     .zip(color.par_chunks(CHUNK))
             //     .zip(generation.par_chunks(CHUNK))
-            //     .for_each(|((((out_c, ra_c), ga_c), ba_c), gen_c)| {
-            //         for i in 0..out_c.len() {
-            //             unsafe {
-            //                 if *gen_c.get_unchecked(i) == current_gen {
-            //                     let r: i32 = (ra_c[i] * 255.0).to_int_unchecked();
-            //                     let g: i32 = (ga_c[i] * 255.0).to_int_unchecked();
-            //                     let b: i32 = (ba_c[i] * 255.0).to_int_unchecked();
-            //                     *out_c.get_unchecked_mut(i) = (r << 16) | (g << 8) | b;
-            //                 } else {
-            //                     *out_c.get_unchecked_mut(i) = 0;
-            //                 }
+            //     .for_each(|((out, color), generation)| {
+            //         for ((out, color), &generation) in out.iter_mut().zip(color).zip(generation) {
+            //             if generation == current_gen {
+            //                 let color = wide::f32x4::from(color.to_array()) * conv;
+            //                 let combined = bytemuck::cast(color.fast_round_int().reduce_add());
+            //                 *out = combined;
+            //             } else {
+            //                 *out = 0;
             //             }
             //         }
             //     });
