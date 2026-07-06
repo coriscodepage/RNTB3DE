@@ -93,9 +93,9 @@ where
                 let v2 = pre(Vertex::new(position[2], data[2]));
                 let triangle = Triangle {
                     position: [
-                        PipelineForward::to_screen_space(v0.position, screen_width, screen_height),
-                        PipelineForward::to_screen_space(v1.position, screen_width, screen_height),
-                        PipelineForward::to_screen_space(v2.position, screen_width, screen_height),
+                        PipelineForward::to_screen_space(v0.position, screen_width, screen_height).unwrap(), // TODO: New degenerate triangle impl!
+                        PipelineForward::to_screen_space(v1.position, screen_width, screen_height).unwrap(), // TODO: New degenerate triangle impl!
+                        PipelineForward::to_screen_space(v2.position, screen_width, screen_height).unwrap(), // TODO: New degenerate triangle impl!
                     ],
                     depth: [
                         Vec2::new(v0.position.z, 1.0),

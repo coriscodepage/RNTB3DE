@@ -41,6 +41,19 @@ where
     pub(crate) data: [T; 3],
 }
 
+impl<T> Triangle<T>
+where
+    T: Lerp + Send + Sync,
+{
+    pub fn degenerate(data: [T; 3]) -> Self {
+        Self {
+            position: [IVec2::ZERO; 3],
+            depth: [Vec2::ZERO; 3],
+            data,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DrawTri {
     pub draw_id: u32,

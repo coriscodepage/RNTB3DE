@@ -36,11 +36,19 @@ impl Renderer {
         }
     }
 
-    pub(crate) fn borrow_framebuffer(&self, id: usize) -> &Framebuffer {
+    pub fn borrow_framebuffer(&self, id: usize) -> &Framebuffer {
         if id >= self.framebuffers.len() {
             panic!("Invalid framebuffer ID: {}", id);
         } else {
             self.framebuffers[id].as_ref().unwrap()
+        }
+    }
+
+    pub fn borrow_framebuffer_mut(&mut self, id: usize) -> &mut Framebuffer {
+        if id >= self.framebuffers.len() {
+            panic!("Invalid framebuffer ID: {}", id);
+        } else {
+            self.framebuffers[id].as_mut().unwrap()
         }
     }
 
@@ -87,47 +95,6 @@ impl Renderer {
             self.textures[id] = Some(tex);
         } else {
             panic!("Invalid texture ID: {}", id);
-        }
-    }
-
-    #[inline]
-    pub fn buffer_to_u8(&self, id: usize, out: &mut [i32]) {
-        if id >= self.framebuffers.len() {
-            panic!("Invalid framebuffer ID: {}", id);
-        } else {
-            let buffer = self.framebuffers[id].as_ref().unwrap();
-            let (color, generation) = buffer.get_color();
-            let current_gen = buffer.current_generation();
-            let conv = wide::f32x4::from([
-                255.0 * (1 << 16) as f32,
-                255.0 * (1 << 8) as f32,
-                255.0,
-                0.0,
-            ]);
-            for (i, (color, &generation)) in color.iter().zip(generation).enumerate() {
-                if generation == current_gen {
-                    let color = wide::f32x4::from(color.to_array()) * conv;
-                    let combined = bytemuck::cast(color.fast_round_int().reduce_add());
-                    unsafe { *out.get_unchecked_mut(i) = combined };
-                } else {
-                    unsafe { *out.get_unchecked_mut(i) = 0 };
-                }
-            }
-            // const CHUNK: usize = 4096;
-            // out.par_chunks_mut(CHUNK)
-            //     .zip(color.par_chunks(CHUNK))
-            //     .zip(generation.par_chunks(CHUNK))
-            //     .for_each(|((out, color), generation)| {
-            //         for ((out, color), &generation) in out.iter_mut().zip(color).zip(generation) {
-            //             if generation == current_gen {
-            //                 let color = wide::f32x4::from(color.to_array()) * conv;
-            //                 let combined = bytemuck::cast(color.fast_round_int().reduce_add());
-            //                 *out = combined;
-            //             } else {
-            //                 *out = 0;
-            //             }
-            //         }
-            //     });
         }
     }
 

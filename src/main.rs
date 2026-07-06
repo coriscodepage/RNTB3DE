@@ -1,8 +1,8 @@
+mod presentation;
 use core::f32;
 use internals::imports::model::{MeshData, Model};
 use renderer::abstraction::context::Context;
 use renderer::abstraction::program::Program;
-use renderer::dag::*;
 use renderer::datatypes::Vertex;
 use renderer::forward_pipeline::PipelineForward;
 use renderer::renderer::Renderer;
@@ -10,16 +10,16 @@ use renderer::texture::Texture;
 use sdl3::event::Event;
 use sdl3::keyboard::Keycode;
 use std::cell::RefCell;
-use std::fs::{self, File};
-use std::path::Path;
+use std::fs::{self};
+use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
+use std::thread;
 use std::time::{Duration, Instant};
 
-static WIDTH: usize = 1280;
-static HEIGHT: usize = 720;
-//  pub fn main() {
+use crate::presentation::PresentationBuffer;
 
-//  }
+static WIDTH: usize = 1920;
+static HEIGHT: usize = 1080;
 
 pub fn main() {
     let sdl_context = sdl3::init().unwrap();
@@ -31,87 +31,114 @@ pub fn main() {
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     let mut second_start = Instant::now();
-    let mut frames = 0;
+    // let mut frames = 0;
 
-    let i = AtomicI32::new(0);
+    let presentation = Arc::new(PresentationBuffer::new(WIDTH, HEIGHT));
 
-    let texture = Texture::from_png("african_head_diffuse.png");
+    let render_present = presentation.clone();
+    thread::spawn(move || {
+        let mut frames_r = 0;
+        let i = AtomicI32::new(0);
 
-    let texture2 = Texture::from_png("neferiti_deffuse.png");
+        let texture = Texture::from_png("african_head_diffuse.png");
 
-    let mut renderer = Renderer::new();
-    
-    let tex_id_1 = renderer.insert_texture(texture);
-    let tex_id_2 = renderer.insert_texture(texture2);
+        let texture2 = Texture::from_png("neferiti_deffuse.png");
 
-    let fb_id = renderer.create_framebuffer(WIDTH, HEIGHT);
+        let mut renderer = Renderer::new();
 
-    let program = Program::new(
-        |mut v: Vertex<MeshData>| {
-            let i = i.load(std::sync::atomic::Ordering::Relaxed);
-            let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
-            let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
-            let y_axis = glam::vec3(0.0, 1.0, 0.0);
-            let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
-            let rot = glam::mat3(x_axis, y_axis, z_axis);
+        let tex_id_1 = renderer.insert_texture(texture);
+        let tex_id_2 = renderer.insert_texture(texture2);
 
-            let trans = glam::Mat4::from_translation(glam::vec3(-0.2, 0.0, 0.0));
-            let p = glam::vec3(
-                v.position.x / (16.0 / 9.0),
-                v.position.y,
-                v.position.z / (16.0 / 9.0),
+        let fb_id = renderer.create_framebuffer(WIDTH, HEIGHT);
+
+        let program = Program::new(
+            |mut v: Vertex<MeshData>| {
+                let i = i.load(std::sync::atomic::Ordering::Relaxed);
+                let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
+                let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
+                let y_axis = glam::vec3(0.0, 1.0, 0.0);
+                let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
+                let rot = glam::mat3(x_axis, y_axis, z_axis);
+
+                let trans = glam::Mat4::from_translation(glam::vec3(-0.2, 0.0, 0.0));
+                let p = glam::vec3(
+                    v.position.x / (16.0 / 9.0),
+                    v.position.y,
+                    v.position.z / (16.0 / 9.0),
+                );
+                let v3 = 1.0 * rot * p;
+                let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
+                v.position = glam::vec3(v4.x, v4.y, v4.z);
+                v
+            },
+            &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
+                // let color = ctx.sample_texture(0, v.data.texture_uv.x, v.data.texture_uv.y);
+                // let color = texture.sample(v.data.texture_uv.x, v.data.texture_uv.y);
+                let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
+                color
+            }],
+        );
+
+        let program2 = Program::new(
+            |mut v: Vertex<MeshData>| {
+                let i = i.load(std::sync::atomic::Ordering::Relaxed);
+                let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
+                let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
+                let y_axis = glam::vec3(0.0, 1.0, 0.0);
+                let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
+                let rot = glam::mat3(x_axis, y_axis, z_axis);
+
+                let trans = glam::Mat4::from_translation(glam::vec3(0.5, 0.2, 0.0));
+                let p = glam::vec3(
+                    v.position.x / (16.0 / 9.0),
+                    v.position.y,
+                    v.position.z / (16.0 / 9.0),
+                );
+                let v3 = 0.4 * rot * p;
+                let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
+                v.position = glam::vec3(v4.x, v4.y, v4.z);
+                v
+            },
+            &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
+                // let color =ctx.sample_texture_fail_silent(1, v.data.texture_uv.x, v.data.texture_uv.y);
+                // let color = texture2.sample_fail_silent(v.data.texture_uv.x, v.data.texture_uv.y);
+                let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
+                color
+            }],
+        );
+        let mut pipeline = PipelineForward::new();
+
+        let renderer = RefCell::new(renderer);
+        let file = fs::read_to_string("african_head.obj").unwrap();
+        let model1 = Model::from_obj_string(&file);
+        let file = fs::read_to_string("blam2.obj").unwrap();
+        let model2 = Model::from_obj_string(&file);
+
+        let mut context = Context::new(&renderer);
+        context.bind_framebuffers_write(fb_id).unwrap();
+        context.bind_texture(tex_id_1).unwrap();
+        context.bind_texture(tex_id_2).unwrap();
+        loop {
+            renderer.borrow_mut().clear_framebuffer(fb_id);
+
+            pipeline.assemble_and_run(&mut context, &program, &model1.mesh);
+            pipeline.assemble_and_run(&mut context, &program2, &model2.mesh);
+
+            render_present.write(renderer.borrow_mut().borrow_framebuffer_mut(fb_id));
+
+            if second_start.elapsed() >= Duration::new(1, 0) {
+                println!("render FPS: {}", frames_r);
+                frames_r = 0;
+                second_start = Instant::now();
+            }
+            frames_r += 1;
+
+            i.store(
+                i.load(std::sync::atomic::Ordering::Relaxed) + 1,
+                std::sync::atomic::Ordering::Relaxed,
             );
-            let v3 = 1.0 * rot * p;
-            let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
-            v.position = glam::vec3(v4.x, v4.y, v4.z);
-            v
-        },
-        &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
-            let color = ctx.sample_texture(0, v.data.texture_uv.x, v.data.texture_uv.y);
-            // let color = texture.sample(v.data.texture_uv.x, v.data.texture_uv.y);
-            // let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
-            color
-        }],
-    );
-
-    let program2 = Program::new(
-        |mut v: Vertex<MeshData>| {
-            let i = i.load(std::sync::atomic::Ordering::Relaxed);
-            let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
-            let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
-            let y_axis = glam::vec3(0.0, 1.0, 0.0);
-            let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
-            let rot = glam::mat3(x_axis, y_axis, z_axis);
-
-            let trans = glam::Mat4::from_translation(glam::vec3(0.5, 0.2, 0.0));
-            let p = glam::vec3(
-                v.position.x / (16.0 / 9.0),
-                v.position.y,
-                v.position.z / (16.0 / 9.0),
-            );
-            let v3 = 0.4 * rot * p;
-            let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
-            v.position = glam::vec3(v4.x, v4.y, v4.z);
-            v
-        },
-        &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
-            let color = ctx.sample_texture_fail_silent(1, v.data.texture_uv.x, v.data.texture_uv.y);
-            // let color = texture2.sample_fail_silent(v.data.texture_uv.x, v.data.texture_uv.y);
-            color
-        }],
-    );
-    let mut pipeline = PipelineForward::new();
-
-    let renderer = RefCell::new(renderer);
-    let file = fs::read_to_string("african_head.obj").unwrap();
-    let model1 = Model::from_obj_string(&file);
-    let file = fs::read_to_string("blam2.obj").unwrap();
-    let model2 = Model::from_obj_string(&file);
-    
-    let mut context = Context::new(&renderer);
-    context.bind_framebuffers_write(fb_id).unwrap();
-    context.bind_texture(tex_id_1);
-    context.bind_texture(tex_id_2);
+        }
+    });
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -127,32 +154,20 @@ pub fn main() {
             }
         }
 
-        renderer.borrow_mut().clear_framebuffer(fb_id);
-
-        pipeline.assemble_and_run(&mut context, &program, &model1.mesh);
-        pipeline.assemble_and_run(&mut context, &program2, &model2.mesh);
-
-        // pipeline2.run_pixel(&mut renderer, |a| {
-        //     let c = texture[((a.0 + a.1 * info.width as i32) as usize).min(texture.len() - 1)];
-        //     glam::vec4(c[0], c[1], c[2], 1.0)
-        // });
         let mut win_surf = window.surface(&event_pump).unwrap();
         let pixels = unsafe { win_surf.without_lock_mut().unwrap() };
-        renderer
-            .borrow()
-            .buffer_to_u8(fb_id, bytemuck::cast_slice_mut(pixels));
+        presentation.read(|framebuffer| framebuffer.buffer_to_u8(bytemuck::cast_slice_mut(pixels)));
+        // renderer
+        //     .borrow()
+        //     .buffer_to_u8(fb_id, bytemuck::cast_slice_mut(pixels));
         win_surf.update_window().unwrap();
 
-        if second_start.elapsed() >= Duration::new(1, 0) {
-            println!("FPS: {}", frames);
-            frames = 0;
-            second_start = Instant::now();
-        }
-        frames += 1;
-        i.store(
-            i.load(std::sync::atomic::Ordering::Relaxed) + 1,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        // if second_start.elapsed() >= Duration::new(1, 0) {
+        //     println!("FPS: {}", frames);
+        //     frames = 0;
+        //     second_start = Instant::now();
+        // }
+        // frames += 1;
         // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
     }
 }

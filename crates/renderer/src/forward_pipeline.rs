@@ -1,36 +1,31 @@
 use std::{
     cmp::{max, min},
-    default,
     mem::MaybeUninit,
+    sync::atomic::{
+        AtomicUsize,
+        Ordering::{self, Relaxed},
+    },
 };
 
 use crate::{
     abstraction::{context::Context, program::Program},
     datatypes::{FragmentInput, Triangle, Vertex},
-    framebuffer::{Framebuffer, MAX_BINDS, TILE_SIZE, TileBin, TilesInfo},
+    framebuffer::{Framebuffer, MAX_BINDS, TILE_SIZE, Tile, TileBin, TilesInfo},
     lerp::Lerp,
     mesh::Mesh,
     rasterizer::Rasterizer,
     renderer::morton,
 };
-use bumpalo::{Bump, collections::CollectIn};
+use bumpalo::Bump;
 use glam::{IVec2, Vec2, Vec3, Vec4};
-use itertools::Itertools;
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
         ParallelIterator,
     },
-    slice::ParallelSlice,
+    slice::{ParallelSlice, ParallelSliceMut},
 };
-use smallvec::SmallVec;
 use std::fmt::Debug;
-
-#[derive(Debug, Clone, Copy)]
-struct Candidate<const COUNT: usize = 64> {
-    count: usize,
-    indeces: [(usize, usize); COUNT],
-}
 
 #[derive(Debug)]
 pub struct PipelineForward {
@@ -54,6 +49,7 @@ impl PipelineForward {
         VS: Fn(Vertex<T>) -> Vertex<T> + Send + Sync,
         FS: Fn(&FragmentInput<T>, &mut Context<MAX_BINDS>) -> Vec4 + Send + Sync + Clone,
     {
+        let t0 = std::time::Instant::now();
         if context.framebuffer_write_count() != program.fragment().len() {
             panic!("Render buffer count does not match shader count.");
         }
@@ -66,6 +62,8 @@ impl PipelineForward {
         let screen_height = framebuffers.iter().map(|b| b.height()).min().unwrap_or(0);
 
         let vertex_shader = program.vertex();
+        let t1 = std::time::Instant::now();
+
         let triangles: &mut [MaybeUninit<Triangle<T>>] = self
             .arena
             .alloc_slice_fill_clone(mesh.positions.len() / 3, &MaybeUninit::uninit());
@@ -77,19 +75,25 @@ impl PipelineForward {
                 let v0 = vertex_shader(Vertex::new(pos[0], data[0]));
                 let v1 = vertex_shader(Vertex::new(pos[1], data[1]));
                 let v2 = vertex_shader(Vertex::new(pos[2], data[2]));
-                tri.write(Triangle {
-                    position: [
-                        Self::to_screen_space(v0.position, screen_width, screen_height),
-                        Self::to_screen_space(v1.position, screen_width, screen_height),
-                        Self::to_screen_space(v2.position, screen_width, screen_height),
-                    ],
-                    depth: [
-                        Vec2::new(v0.position.z, 1.0),
-                        Vec2::new(v1.position.z, 1.0),
-                        Vec2::new(v2.position.z, 1.0),
-                    ],
-                    data: [v0.data, v1.data, v2.data],
-                });
+                let p0 = Self::to_screen_space(v0.position, screen_width, screen_height);
+                let p1 = Self::to_screen_space(v1.position, screen_width, screen_height);
+                let p2 = Self::to_screen_space(v2.position, screen_width, screen_height);
+                match (p0, p1, p2) {
+                    (Some(p0), Some(p1), Some(p2)) => {
+                        tri.write(Triangle {
+                            position: [p0, p1, p2],
+                            depth: [
+                                Vec2::new(v0.position.z, 1.0),
+                                Vec2::new(v1.position.z, 1.0),
+                                Vec2::new(v2.position.z, 1.0),
+                            ],
+                            data: [v0.data, v1.data, v2.data],
+                        });
+                    }
+                    _ => {
+                        tri.write(Triangle::degenerate([v0.data, v0.data, v0.data]));
+                    }
+                }
             });
 
         let triangles: &mut [Triangle<T>] = unsafe {
@@ -98,6 +102,7 @@ impl PipelineForward {
                 triangles.len(),
             )
         };
+        let t2 = std::time::Instant::now();
 
         let tiles = framebuffers
             .iter()
@@ -106,6 +111,7 @@ impl PipelineForward {
             .get_tiles();
 
         let bins = Self::bin_triangles(&self.arena, tiles, triangles);
+        let t3 = std::time::Instant::now();
 
         let fb_ptr = self.arena.alloc_slice_fill_iter(
             framebuffers
@@ -144,7 +150,17 @@ impl PipelineForward {
         // for (&id, fb) in self.render_buffer.iter().zip(framebuffers) {
         //     renderer.put_framebuffer(id, fb);
         // }
+        let t4 = std::time::Instant::now();
         context.put_back();
+        let t5 = std::time::Instant::now();
+        // println!(
+        //     "Frame start; frame after basic setup: {}; triangles created: {}; triangles binned: {}; rasterization complete: {}; frame end: {} (all in nano seconds)",
+        //     t1.duration_since(t0).as_nanos(),
+        //     t2.duration_since(t1).as_nanos(),
+        //     t3.duration_since(t2).as_nanos(),
+        //     t4.duration_since(t3).as_nanos(),
+        //     t5.duration_since(t4).as_nanos(),
+        // );
     }
 
     pub fn bin_triangles<'a, T: Lerp + Copy + Debug + Send + Sync>(
@@ -153,137 +169,120 @@ impl PipelineForward {
         triangles: &[Triangle<T>],
     ) -> &'a mut [TileBin<'a>] {
         let TilesInfo { cols, rows, tiles } = tiles;
-        const CHUNK: usize = 8000;
-        const BATCH: usize = 256;
-        let (s, r) = crossbeam::channel::unbounded();
+        const CHUNK: usize = 400;
 
-
-        let bins_scratch = arena.alloc_slice_fill_with(tiles.len(), |_| {
-            bumpalo::collections::Vec::with_capacity_in(64, arena)
-        });
         let mut bins = bumpalo::collections::Vec::with_capacity_in(tiles.len(), arena);
 
-        rayon::in_place_scope(|scope| {
-            scope.spawn(|_| {
-                triangles
-                    .par_chunks(CHUNK)
-                    .enumerate()
-                    .for_each(|(current_chunk, triangles)| {
-                        let mut candidates = Candidate {
-                            count: 0,
-                            indeces: [(0, 0); BATCH],
-                        };
-                        for (i, triangle) in triangles.iter().enumerate() {
-                            let i = current_chunk * CHUNK + i;
-                            let [
-                                IVec2 { x: ax, y: ay },
-                                IVec2 { x: bx, y: by },
-                                IVec2 { x: cx, y: cy },
-                            ] = triangle.position;
+        let counts = arena.alloc_slice_fill_with(tiles.len(), |_| AtomicUsize::new(0));
 
-                            let bb_min_x = min(min(ax, bx), cx);
-                            let bb_min_y = min(min(ay, by), cy);
-                            let bb_max_x = max(max(ax, bx), cx);
-                            let bb_max_y = max(max(ay, by), cy);
-                            let total_area =
-                                Self::double_signed_triangle_area(ax, ay, bx, by, cx, cy);
-                            let (x_normal_a, y_normal_a) = (-(by - ay), bx - ax);
-                            let (x_normal_b, y_normal_b) = (-(cy - by), cx - bx);
-                            let (x_normal_c, y_normal_c) = (-(ay - cy), ax - cx);
-                            let cols_min = (bb_min_x / TILE_SIZE.0 as i32).max(0) as usize;
-                            let cols_max =
-                                ((bb_max_x / TILE_SIZE.0 as i32).max(0) as usize).min(*cols - 1);
-                            let rows_min = (bb_min_y / TILE_SIZE.1 as i32).max(0) as usize;
-                            let rows_max =
-                                ((bb_max_y / TILE_SIZE.1 as i32).max(0) as usize).min(*rows - 1);
-                            if total_area >= 2.0 {
-                                for row in rows_min..=rows_max {
-                                    for col in cols_min..=cols_max {
-                                        let tile = &tiles[row * cols + col];
-
-                                        let tile_min = tile.min();
-                                        let tile_max = tile.max();
-                                        if tile_min.x <= bb_min_x
-                                            && tile_max.x >= bb_max_x
-                                            && tile_min.y <= bb_min_y
-                                            && tile_max.y >= bb_max_y
-                                        {
-                                            candidates.indeces[candidates.count] =
-                                                (row * cols + col, i);
-                                            candidates.count += 1;
-                                            if candidates.count == BATCH {
-                                                candidates.indeces.sort_unstable_by_key(|v| v.0);
-                                                s.send(candidates).unwrap();
-                                                candidates.count = 0;
-                                            }
-                                            // bins_scratch[row * cols + col].push(i);
-                                            continue;
-                                        }
-
-                                        let a = Self::furthest_point(
-                                            tile_min, tile_max, x_normal_a, y_normal_a,
-                                        );
-                                        let b = Self::furthest_point(
-                                            tile_min, tile_max, x_normal_b, y_normal_b,
-                                        );
-                                        let c = Self::furthest_point(
-                                            tile_min, tile_max, x_normal_c, y_normal_c,
-                                        );
-                                        if Self::edge_function(
-                                            triangle.position[0],
-                                            triangle.position[1],
-                                            a,
-                                        ) < 0
-                                            || Self::edge_function(
-                                                triangle.position[1],
-                                                triangle.position[2],
-                                                b,
-                                            ) < 0
-                                            || Self::edge_function(
-                                                triangle.position[2],
-                                                triangle.position[0],
-                                                c,
-                                            ) < 0
-                                        {
-                                            continue;
-                                        }
-                                        candidates.indeces[candidates.count] =
-                                            (row * cols + col, i);
-                                        candidates.count += 1;
-                                        if candidates.count == BATCH {
-                                            candidates.indeces.sort_unstable_by_key(|v| v.0);
-                                            s.send(candidates).unwrap();
-                                            candidates.count = 0;
-                                        } // bins_scratch[row * cols + col].push(i);
-                                    }
-                                }
-                            }
-                        }
-                        if candidates.count > 0 {
-                            s.send(candidates).unwrap();
-                        }
-                    });
-                drop(s);
-            });
-
-            while let Ok(candidates) = r.recv() {
-                for i in 0..candidates.count {
-                    let candidate = candidates.indeces[i];
-                    unsafe { bins_scratch.get_unchecked_mut(candidate.0).push(candidate.1) };
-                }
+        triangles.par_chunks(CHUNK).for_each(|triangles| {
+            for triangle in triangles.iter() {
+                Self::check_triangle(triangle, *rows, *cols, tiles, |tile_idx| {
+                    counts[tile_idx].fetch_add(1, Ordering::Relaxed);
+                });
             }
         });
 
-        bins_scratch.iter().enumerate().for_each(|(bin, indices)| {
-            let tile = tiles[bin];
-            bins.push(TileBin {
-                tile,
-                indices,
-                morton_key: morton(tile.x as u32, tile.y as u32),
+        let offsets = arena.alloc_slice_fill_with(tiles.len() + 1, |_| 0usize);
+
+        let mut running_total = 0;
+        counts
+            .iter()
+            .zip(offsets.iter_mut())
+            .for_each(|(count, offset)| {
+                *offset = running_total;
+                running_total += count.load(Relaxed);
             });
+        offsets[tiles.len()] = running_total;
+
+        let cursors = arena.alloc_slice_fill_with(tiles.len(), |i| AtomicUsize::new(offsets[i]));
+        let flat = arena.alloc_slice_fill_copy(running_total, 0usize);
+        let flat_ptr = flat.as_mut_ptr() as usize;
+
+        triangles
+            .par_chunks(CHUNK)
+            .enumerate()
+            .for_each(|(current_chunk, triangles)| {
+                for (i, triangle) in triangles.iter().enumerate() {
+                    let i = current_chunk * CHUNK + i;
+                    Self::check_triangle(triangle, *rows, *cols, tiles, |tile_idx| {
+                        let cursor = cursors[tile_idx].fetch_add(1, Ordering::Relaxed);
+                        unsafe { *(flat_ptr as *mut usize).add(cursor) = i };
+                    });
+                }
+            });
+
+        tiles.iter().enumerate().for_each(|(i, &tile)| {
+            let start = offsets[i];
+            let stop = offsets[i + 1];
+            let indices = &flat[start..stop];
+            if !indices.is_empty() {
+                bins.push(TileBin {
+                    tile,
+                    indices,
+                    morton_key: morton(tile.x as u32, tile.y as u32),
+                });
+            }
         });
-        bins.sort_unstable_by_key(|v| v.morton_key);
+
+        bins.par_sort_unstable_by_key(|v| v.morton_key);
         bins.into_bump_slice_mut()
+    }
+
+    fn check_triangle<T: Lerp + Copy + Debug + Send + Sync, F: FnMut(usize)>(
+        triangle: &Triangle<T>,
+        rows: usize,
+        cols: usize,
+        tiles: &[Tile],
+        mut func: F,
+    ) {
+        let [
+            IVec2 { x: ax, y: ay },
+            IVec2 { x: bx, y: by },
+            IVec2 { x: cx, y: cy },
+        ] = triangle.position;
+
+        let bb_min_x = min(min(ax, bx), cx);
+        let bb_min_y = min(min(ay, by), cy);
+        let bb_max_x = max(max(ax, bx), cx);
+        let bb_max_y = max(max(ay, by), cy);
+        let total_area = Self::double_signed_triangle_area(ax, ay, bx, by, cx, cy);
+        let (x_normal_a, y_normal_a) = (-(by - ay), bx - ax);
+        let (x_normal_b, y_normal_b) = (-(cy - by), cx - bx);
+        let (x_normal_c, y_normal_c) = (-(ay - cy), ax - cx);
+        let cols_min = (bb_min_x / TILE_SIZE.0 as i32).max(0) as usize;
+        let cols_max = ((bb_max_x / TILE_SIZE.0 as i32).max(0) as usize).min(cols - 1);
+        let rows_min = (bb_min_y / TILE_SIZE.1 as i32).max(0) as usize;
+        let rows_max = ((bb_max_y / TILE_SIZE.1 as i32).max(0) as usize).min(rows - 1);
+        if total_area >= 2.0 {
+            for row in rows_min..=rows_max {
+                for col in cols_min..=cols_max {
+                    let tile = &tiles[row * cols + col];
+
+                    let tile_min = tile.min();
+                    let tile_max = tile.max();
+                    if tile_min.x <= bb_min_x
+                        && tile_max.x >= bb_max_x
+                        && tile_min.y <= bb_min_y
+                        && tile_max.y >= bb_max_y
+                    {
+                        func(row * cols + col);
+                        continue;
+                    }
+
+                    let a = Self::furthest_point(tile_min, tile_max, x_normal_a, y_normal_a);
+                    let b = Self::furthest_point(tile_min, tile_max, x_normal_b, y_normal_b);
+                    let c = Self::furthest_point(tile_min, tile_max, x_normal_c, y_normal_c);
+                    if Self::edge_function(triangle.position[0], triangle.position[1], a) < 0
+                        || Self::edge_function(triangle.position[1], triangle.position[2], b) < 0
+                        || Self::edge_function(triangle.position[2], triangle.position[0], c) < 0
+                    {
+                        continue;
+                    }
+                    func(row * cols + col);
+                }
+            }
+        }
     }
 
     pub fn run_pixel<P>(&mut self, context: &mut Context<MAX_BINDS>, shader: P)
@@ -339,16 +338,18 @@ impl PipelineForward {
     }
 
     #[inline(always)]
-    pub(crate) fn to_screen_space(position: Vec3, width: i32, height: i32) -> IVec2 {
-        let x = ((position.x + 1.0) * 0.5 * width as f32)
-            .max(0.0)
-            .min((width - 1) as f32);
-        let y = ((1.0 - (position.y + 1.0) * 0.5) * height as f32)
-            .max(0.0)
-            .min((height - 1) as f32);
-        IVec2::new(unsafe { x.to_int_unchecked() }, unsafe {
-            y.to_int_unchecked()
-        })
+    pub(crate) fn to_screen_space(position: Vec3, width: i32, height: i32) -> Option<IVec2> {
+        // FIXME: This is a reject approach. This straight up won't work for a game engine.
+        // TODO: Implement https://pl.wikipedia.org/wiki/Algorytm_Sutherlanda-Hodgmana
+        let x = (position.x + 1.0) * 0.5 * width as f32;
+        let y = (1.0 - (position.y + 1.0) * 0.5) * height as f32;
+        if x < 0.0 || x > (width - 1) as f32 || y < 0.0 || y > (height - 1) as f32 {
+            None
+        } else {
+            Some(IVec2::new(unsafe { x.to_int_unchecked() }, unsafe {
+                y.to_int_unchecked()
+            }))
+        }
     }
 }
 

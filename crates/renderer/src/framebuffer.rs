@@ -1,9 +1,11 @@
 use glam::{IVec2, Vec2, Vec4, vec4};
 use smallvec::SmallVec;
+use wide::bytemuck;
 
 pub static TILE_SIZE: (usize, usize) = (64, 64);
 pub static MAX_BINDS: usize = 16;
 
+#[derive(Debug, Clone)]
 pub struct Framebuffer {
     color: Vec<Vec4>,
     depth: Vec<f32>,
@@ -138,6 +140,52 @@ impl Framebuffer {
             self.depth[index]
         }
     }
+
+    // #[inline]
+    // pub fn transfer(&mut self, source: &Framebuffer) {
+    //     rayon::scope(|s| {
+    //         s.spawn(|_| self.color.copy_from_slice(&source.color));
+    //         s.spawn(|_| self.depth.copy_from_slice(&source.depth));
+    //         s.spawn(|_| self.generation.copy_from_slice(&source.generation));
+    //     });
+    //     self.current_generation = source.current_generation;
+    // }
+
+    #[inline]
+    pub fn buffer_to_u8(&self, out: &mut [i32]) {
+        let (color, generation) = (&self.color, &self.generation);
+        let current_gen = self.current_generation;
+        let conv = wide::f32x4::from([
+            255.0 * (1 << 16) as f32,
+            255.0 * (1 << 8) as f32,
+            255.0,
+            0.0,
+        ]);
+        for (i, (color, &generation)) in color.iter().zip(generation).enumerate() {
+            if generation == current_gen {
+                let color = wide::f32x4::from(color.to_array()) * conv;
+                let combined = bytemuck::cast(color.fast_round_int().reduce_add());
+                unsafe { *out.get_unchecked_mut(i) = combined };
+            } else {
+                unsafe { *out.get_unchecked_mut(i) = 0 };
+            }
+        }
+        // const CHUNK: usize = 4096;
+        // out.par_chunks_mut(CHUNK)
+        //     .zip(color.par_chunks(CHUNK))
+        //     .zip(generation.par_chunks(CHUNK))
+        //     .for_each(|((out, color), generation)| {
+        //         for ((out, color), &generation) in out.iter_mut().zip(color).zip(generation) {
+        //             if generation == current_gen {
+        //                 let color = wide::f32x4::from(color.to_array()) * conv;
+        //                 let combined = bytemuck::cast(color.fast_round_int().reduce_add());
+        //                 *out = combined;
+        //             } else {
+        //                 *out = 0;
+        //             }
+        //         }
+        //     });
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -158,6 +206,7 @@ impl Tile {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TilesInfo {
     pub cols: usize,
     pub rows: usize,
