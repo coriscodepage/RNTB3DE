@@ -10,35 +10,11 @@ pub struct Texture {
 }
 
 impl Texture {
-    pub fn new() -> Self {
-        Self {
-            color: Vec::new(),
-            width: 0,
-            height: 0,
-        }
-    }
-
-    pub fn from_png<P: AsRef<Path>>(path: P) -> Self {
-        let decoder = png::Decoder::new(std::io::BufReader::new(
-            File::open::<P>(path.into()).unwrap(),
-        ));
-        let mut reader = decoder.read_info().unwrap();
-        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-        let info = reader.next_frame(&mut buf).unwrap();
-        let binding = buf[..info.buffer_size()]
-            .iter()
-            .copied()
-            .map(|c| c as f32 / 255.0)
-            .collect::<Vec<f32>>();
-        let texture: &[[f32; 3]] = bytemuck::cast_slice(&binding);
-        let color = texture
-            .iter()
-            .map(|tri| vec4(tri[0], tri[1], tri[2], 1.0))
-            .collect();
+    pub fn new(color: Vec<Vec4>, width: i32, height: i32) -> Self {
         Self {
             color,
-            width: info.width as i32,
-            height: info.height as i32,
+            width,
+            height,
         }
     }
 

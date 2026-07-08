@@ -96,6 +96,7 @@ impl Framebuffer {
         // }
     }
 
+    #[inline]
     pub unsafe fn write_fragment(&mut self, x: i32, y: i32, depth: f32, color: Vec4) {
         let index = unsafe { y.unchecked_mul(self.width).unchecked_add(x) as usize };
         // if depth < self.depth[index] {

@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 renderer = {path = "../renderer"}
 glam = {version="0.33.0", features = ["fast-math", "approx"]}
+png = "0.18.1"
+bytemuck = "1.25.0"

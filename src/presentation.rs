@@ -1,10 +1,13 @@
-use std::{mem, sync::{
-    Mutex,
-    atomic::{
-        AtomicUsize,
-        Ordering::{Acquire, Relaxed, Release},
+use std::{
+    mem,
+    sync::{
+        Mutex,
+        atomic::{
+            AtomicUsize,
+            Ordering::{Acquire, Relaxed, Release},
+        },
     },
-}};
+};
 
 use renderer::framebuffer::Framebuffer;
 
@@ -35,7 +38,7 @@ impl PresentationBuffer {
         // TODO: Check the sizes of the fbs. Maybe do that in the Framebuffer struct proper?
         let index = 1 - self.latest.load(Relaxed);
         let mut buffer = self.buffers[index].lock().unwrap();
-        mem::swap(&mut *buffer, fb);
+        mem::swap(&mut *buffer, fb); // INFO: This corrupts the presentation fb. This is not an issue if the caller does not wish to sample. Should make this more clear and seperate this from standard fbs in the renderer.
         self.latest.store(index, Release);
     }
 }

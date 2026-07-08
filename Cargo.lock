@@ -156,7 +156,9 @@ dependencies = [
 name = "internals"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "glam",
+ "png",
  "renderer",
 ]
 
@@ -279,7 +281,6 @@ dependencies = [
  "glam",
  "itertools",
  "parking_lot",
- "png",
  "rayon",
  "smallvec",
  "wide",

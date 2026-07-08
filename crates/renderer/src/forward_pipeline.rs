@@ -229,6 +229,7 @@ impl PipelineForward {
         bins.into_bump_slice_mut()
     }
 
+    #[inline]
     fn check_triangle<T: Lerp + Copy + Debug + Send + Sync, F: FnMut(usize)>(
         triangle: &Triangle<T>,
         rows: usize,
@@ -287,10 +288,12 @@ impl PipelineForward {
 
     pub fn run_pixel<P>(&mut self, context: &mut Context<MAX_BINDS>, shader: P)
     where
-        P: Fn((i32, i32)) -> Vec4 + Send + Sync,
+        P: Fn((i32, i32), &mut Context<MAX_BINDS>) -> Vec4 + Send + Sync,
     {
+        // FIXME: Pointer indirection makes mem loads per iter. That is beyond whack.
         context.resolve();
 
+        let ctx_ptr = context as *mut Context<MAX_BINDS> as usize;
         let render_buffers = &mut context.framebuffers_write_resolved;
 
         for framebuffer in render_buffers.iter_mut() {
@@ -298,9 +301,11 @@ impl PipelineForward {
             framebuffer.get_tiles().tiles.par_iter().for_each(|tile| {
                 let min_t = tile.min();
                 let max_t = tile.max();
-                for x in min_t.x..max_t.x {
-                    for y in min_t.y..max_t.y {
-                        let frag_color = shader((x, y));
+                for y in min_t.y..max_t.y {
+                    for x in min_t.x..max_t.x {
+                        let frag_color = shader((x, y), unsafe {
+                            &mut *(ctx_ptr as *mut Context<MAX_BINDS>)
+                        });
                         unsafe {
                             (*(fb_ptr as *mut Framebuffer)).write_fragment(x, y, 1.0, frag_color)
                         };
@@ -399,7 +404,9 @@ mod tests {
         let mut context = Context::new(&renderer);
         context.bind_framebuffers_write(framebuffer_id).unwrap();
 
-        pipeline.run_pixel(&mut context, |(x, y)| vec4(x as f32, y as f32, 0.25, 1.0));
+        pipeline.run_pixel(&mut context, |(x, y), _| {
+            vec4(x as f32, y as f32, 0.25, 1.0)
+        });
 
         let framebuffer = renderer.borrow_mut().take_framebuffer(framebuffer_id);
         assert_eq!(framebuffer.read_pixel(0, 0), vec4(0.0, 0.0, 0.25, 1.0));

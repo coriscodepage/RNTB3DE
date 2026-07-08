@@ -40,9 +40,9 @@ pub fn main() {
         let mut frames_r = 0;
         let i = AtomicI32::new(0);
 
-        let texture = Texture::from_png("african_head_diffuse.png");
+        let texture = internals::imports::texture::from_png("african_head_diffuse.png");
 
-        let texture2 = Texture::from_png("neferiti_deffuse.png");
+        let texture2 = internals::imports::texture::from_png("neferiti_deffuse.png");
 
         let mut renderer = Renderer::new();
 
@@ -72,9 +72,9 @@ pub fn main() {
                 v
             },
             &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
-                // let color = ctx.sample_texture(0, v.data.texture_uv.x, v.data.texture_uv.y);
+                let color = ctx.sample_texture(0, v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = texture.sample(v.data.texture_uv.x, v.data.texture_uv.y);
-                let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
+                // let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
                 color
             }],
         );
@@ -100,9 +100,10 @@ pub fn main() {
                 v
             },
             &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
-                // let color =ctx.sample_texture_fail_silent(1, v.data.texture_uv.x, v.data.texture_uv.y);
+                let color =
+                    ctx.sample_texture_fail_silent(1, v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = texture2.sample_fail_silent(v.data.texture_uv.x, v.data.texture_uv.y);
-                let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
+                // let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
                 color
             }],
         );
@@ -123,6 +124,11 @@ pub fn main() {
 
             pipeline.assemble_and_run(&mut context, &program, &model1.mesh);
             pipeline.assemble_and_run(&mut context, &program2, &model2.mesh);
+
+            // pipeline.run_pixel(&mut context, |p, context| {
+            //     let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
+            //     color
+            // });
 
             render_present.write(renderer.borrow_mut().borrow_framebuffer_mut(fb_id));
 
@@ -157,9 +163,6 @@ pub fn main() {
         let mut win_surf = window.surface(&event_pump).unwrap();
         let pixels = unsafe { win_surf.without_lock_mut().unwrap() };
         presentation.read(|framebuffer| framebuffer.buffer_to_u8(bytemuck::cast_slice_mut(pixels)));
-        // renderer
-        //     .borrow()
-        //     .buffer_to_u8(fb_id, bytemuck::cast_slice_mut(pixels));
         win_surf.update_window().unwrap();
 
         // if second_start.elapsed() >= Duration::new(1, 0) {
