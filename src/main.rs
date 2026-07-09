@@ -1,7 +1,8 @@
 mod presentation;
 use core::f32;
 use internals::imports::model::{MeshData, Model};
-use renderer::abstraction::context::Context;
+use internals::samplers::context::with_acquired;
+use renderer::abstraction::context::{RequestedSamplers, RequestedWriters, TextureUnit};
 use renderer::abstraction::program::Program;
 use renderer::datatypes::Vertex;
 use renderer::forward_pipeline::PipelineForward;
@@ -40,16 +41,16 @@ pub fn main() {
         let mut frames_r = 0;
         let i = AtomicI32::new(0);
 
-        let texture = internals::imports::texture::from_png("african_head_diffuse.png");
+        let texture = internals::samplers::texture::from_png("african_head_diffuse.png");
 
-        let texture2 = internals::imports::texture::from_png("neferiti_deffuse.png");
+        let texture2 = internals::samplers::texture::from_png("neferiti_deffuse.png");
 
         let mut renderer = Renderer::new();
 
-        let tex_id_1 = renderer.insert_texture(texture);
-        let tex_id_2 = renderer.insert_texture(texture2);
+        let tex_id_1 = renderer.texture_store.insert_texture(texture);
+        let tex_id_2 = renderer.texture_store.insert_texture(texture2);
 
-        let fb_id = renderer.create_framebuffer(WIDTH, HEIGHT);
+        let fb_id = renderer.framebuffer_store.create_framebuffer(WIDTH, HEIGHT);
 
         let program = Program::new(
             |mut v: Vertex<MeshData>| {
@@ -72,7 +73,8 @@ pub fn main() {
                 v
             },
             &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
-                let color = ctx.sample_texture(0, v.data.texture_uv.x, v.data.texture_uv.y);
+                let color =
+                    ctx.sample_texture(TextureUnit(0), v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = texture.sample(v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
                 color
@@ -100,8 +102,11 @@ pub fn main() {
                 v
             },
             &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
-                let color =
-                    ctx.sample_texture_fail_silent(1, v.data.texture_uv.x, v.data.texture_uv.y);
+                let color = ctx.sample_texture_fail_silent(
+                    TextureUnit(1),
+                    v.data.texture_uv.x,
+                    v.data.texture_uv.y,
+                );
                 // let color = texture2.sample_fail_silent(v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
                 color
@@ -109,28 +114,45 @@ pub fn main() {
         );
         let mut pipeline = PipelineForward::new();
 
-        let renderer = RefCell::new(renderer);
         let file = fs::read_to_string("african_head.obj").unwrap();
         let model1 = Model::from_obj_string(&file);
         let file = fs::read_to_string("blam2.obj").unwrap();
         let model2 = Model::from_obj_string(&file);
-
-        let mut context = Context::new(&renderer);
-        context.bind_framebuffers_write(fb_id).unwrap();
-        context.bind_texture(tex_id_1).unwrap();
-        context.bind_texture(tex_id_2).unwrap();
+        let mut samplers = RequestedSamplers::new();
+        samplers.bind_texture(tex_id_1).unwrap();
+        samplers.bind_texture(tex_id_2).unwrap();
+        let mut writers = RequestedWriters::new();
+        writers.bind_framebuffers_write(fb_id).unwrap();
         loop {
-            renderer.borrow_mut().clear_framebuffer(fb_id);
+            renderer.framebuffer_store.clear_framebuffer(fb_id);
 
-            pipeline.assemble_and_run(&mut context, &program, &model1.mesh);
-            pipeline.assemble_and_run(&mut context, &program2, &model2.mesh);
+            with_acquired(
+                &renderer.texture_store,
+                &mut renderer.framebuffer_store,
+                &samplers,
+                &writers,
+                |samplers_resolved, writers_resolved| {
+                    pipeline.assemble_and_run(
+                        samplers_resolved,
+                        writers_resolved,
+                        &program,
+                        &model1.mesh,
+                    );
+                    pipeline.assemble_and_run(
+                        samplers_resolved,
+                        writers_resolved,
+                        &program2,
+                        &model2.mesh,
+                    );
+                },
+            );
 
             // pipeline.run_pixel(&mut context, |p, context| {
             //     let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
             //     color
             // });
 
-            render_present.write(renderer.borrow_mut().borrow_framebuffer_mut(fb_id));
+            render_present.write(renderer.framebuffer_store.borrow_framebuffer_mut(fb_id));
 
             if second_start.elapsed() >= Duration::new(1, 0) {
                 println!("render FPS: {}", frames_r);
@@ -171,7 +193,7 @@ pub fn main() {
         //     second_start = Instant::now();
         // }
         // frames += 1;
-        // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+        // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 120));
     }
 }
 

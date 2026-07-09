@@ -156,8 +156,10 @@ dependencies = [
 name = "internals"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "bytemuck",
  "glam",
+ "itertools",
  "png",
  "renderer",
 ]

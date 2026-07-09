@@ -1,105 +1,137 @@
-use std::cell::{Ref, RefCell};
+use std::{marker::PhantomData, ops::{Deref, DerefMut}};
 
 use arrayvec::ArrayVec;
 use glam::Vec4;
 
-use crate::{framebuffer::Framebuffer, renderer::Renderer, texture::Texture};
+use crate::{
+    framebuffer::Framebuffer,
+    renderer::{FramebufferId, FramebufferStore, Renderer, TextureId, TextureStore},
+    texture::Texture,
+};
 
-pub struct Context<'a, const COUNT: usize> {
-    renderer: &'a RefCell<Renderer>,
-    texture_binds: ArrayVec<usize, COUNT>,
-    framebuffer_write_binds: ArrayVec<usize, COUNT>,
-    framebuffer_read_binds: ArrayVec<usize, COUNT>,
-    pub framebuffers_write_resolved: ArrayVec<Framebuffer, COUNT>, // TODO: Make this not public if able.
-    textures_resolved: ArrayVec<Ref<'a, Texture>, COUNT>,
-    framebuffers_read_resolved: ArrayVec<Ref<'a, Framebuffer>, COUNT>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TextureUnit(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FramebufferUnit(usize);
+
+#[derive(Debug)]
+pub struct RequestedSamplers<const COUNT: usize> {
+    texture_binds: ArrayVec<TextureId, COUNT>,
+    framebuffer_read_binds: ArrayVec<FramebufferId, COUNT>,
 }
 
-impl<'a, const COUNT: usize> Context<'a, COUNT> {
-    pub fn new(renderer: &'a RefCell<Renderer>) -> Self {
+impl<'a, const COUNT: usize> RequestedSamplers<COUNT> {
+    pub fn new() -> Self {
         Self {
-            renderer,
             texture_binds: ArrayVec::new(),
             framebuffer_read_binds: ArrayVec::new(),
-            framebuffer_write_binds: ArrayVec::new(),
-            textures_resolved: ArrayVec::new(),
-            framebuffers_write_resolved: ArrayVec::new(),
-            framebuffers_read_resolved: ArrayVec::new(),
         }
     }
 
-    pub fn bind_texture(&mut self, id: usize) -> Result<usize, &'static str> {
+    #[inline]
+    pub fn bind_texture(&mut self, id: TextureId) -> Result<TextureUnit, &'static str> {
         self.texture_binds
             .try_push(id)
             .map_err(|_| "No free binds left")?;
-        Ok(self.texture_binds.len() - 1)
+        Ok(TextureUnit(self.texture_binds.len() - 1))
     }
 
-    pub fn bind_framebuffers_write(&mut self, id: usize) -> Result<usize, &'static str> {
-        if self.framebuffer_read_binds.iter().any(|v| *v == id) {
-            return Err("Cant bind same framebuffer for read and write");
-        }
-
-        self.framebuffer_write_binds
-            .try_push(id)
-            .map_err(|_| "No free binds left")?;
-        Ok(self.framebuffer_write_binds.len() - 1)
-    }
-
-    pub fn bind_framebuffers_read(&mut self, id: usize) -> Result<usize, &'static str> {
-        if self.framebuffer_write_binds.iter().any(|v| *v == id) {
-            return Err("Cant bind same framebuffer for read and write");
-        }
-
+    #[inline]
+    pub fn bind_framebuffers_read(
+        &mut self,
+        id: FramebufferId,
+    ) -> Result<FramebufferUnit, &'static str> {
         self.framebuffer_read_binds
             .try_push(id)
             .map_err(|_| "No free binds left")?;
-        Ok(self.framebuffer_read_binds.len() - 1)
+        Ok(FramebufferUnit(self.framebuffer_read_binds.len() - 1))
     }
 
-    pub fn resolve(&mut self) {
-        if self.framebuffer_write_binds.is_empty() {
-            panic!("No render buffer attached to the context.");
-        };
-
-        self.framebuffer_write_binds.iter().for_each(|id| {
-            self.framebuffers_write_resolved
-                .push(self.renderer.borrow_mut().take_framebuffer(*id));
-        });
-
-        self.framebuffer_read_binds.iter().for_each(|id| {
-            self.framebuffers_read_resolved
-                .push(Ref::map(self.renderer.borrow(), |r| {
-                    r.borrow_framebuffer(*id)
-                }));
-        });
-
-        self.texture_binds.iter().for_each(|id| {
-            self.textures_resolved
-                .push(Ref::map(self.renderer.borrow(), |r| r.borrow_texture(*id)))
-        });
+    #[inline]
+    pub fn get_texture_binds(&self) -> &[TextureId] {
+        &self.texture_binds
     }
 
-    pub fn put_back(&mut self) {
-        self.framebuffers_read_resolved.clear();
-        self.textures_resolved.clear();
-        for (i, id) in self.framebuffer_write_binds.iter().enumerate() {
-            let fb = self.framebuffers_write_resolved.remove(i);
-            self.renderer.borrow_mut().put_framebuffer(*id, fb);
+    #[inline]
+    pub fn get_framebuffer_binds(&self) -> &[FramebufferId] {
+        &self.framebuffer_read_binds
+    }
+}
+
+pub struct ResolvedSamplers<'a, const COUNT: usize> {
+    textures_resolved: ArrayVec<&'a Texture, COUNT>,
+    framebuffer_read_resolved: ArrayVec<&'a Framebuffer, COUNT>,
+}
+
+impl<'a, const COUNT: usize> ResolvedSamplers<'a, COUNT> {
+    pub fn new(
+        fbs: ArrayVec<&'a Framebuffer, COUNT>,
+        textures: ArrayVec<&'a Texture, COUNT>,
+    ) -> Self {
+        Self {
+            framebuffer_read_resolved: fbs,
+            textures_resolved: textures,
         }
     }
 
-    pub fn framebuffer_write_count(&self) -> usize {
-        self.framebuffer_write_binds.len()
+    #[inline]
+    pub fn sample_texture(&self, id: TextureUnit, u: f32, v: f32) -> Vec4 {
+        self.textures_resolved[id.0].sample(u, v)
     }
 
     #[inline]
-    pub fn sample_texture(&self, id: usize, u: f32, v: f32) -> Vec4 {
-        self.textures_resolved[id].sample(u, v)
+    pub fn sample_texture_fail_silent(&self, id: TextureUnit, u: f32, v: f32) -> Vec4 {
+        self.textures_resolved[id.0].sample_fail_silent(u, v)
+    }
+}
+
+pub struct RequestedWriters<const COUNT: usize> {
+    framebuffer_write_binds: ArrayVec<FramebufferId, COUNT>,
+}
+
+impl<const COUNT: usize> RequestedWriters<COUNT> {
+    pub fn new() -> Self {
+        Self {
+            framebuffer_write_binds: ArrayVec::new(),
+        }
     }
 
     #[inline]
-    pub fn sample_texture_fail_silent(&self, id: usize, u: f32, v: f32) -> Vec4 {
-        self.textures_resolved[id].sample_fail_silent(u, v)
+    pub fn bind_framebuffers_write(
+        &mut self,
+        id: FramebufferId,
+    ) -> Result<FramebufferUnit, &'static str> {
+        self.framebuffer_write_binds
+            .try_push(id)
+            .map_err(|_| "No free binds left")?;
+        Ok(FramebufferUnit(self.framebuffer_write_binds.len() - 1))
+    }
+
+    #[inline]
+    pub fn get_framebuffer_binds(&self) -> &[FramebufferId] {
+        &self.framebuffer_write_binds
+    }
+}
+
+pub struct ResolvedWriters<const COUNT: usize> {
+    framebuffer_write_resolved: ArrayVec<Framebuffer, COUNT>,
+}
+
+impl<const COUNT: usize> ResolvedWriters<COUNT> {
+    pub fn new(fbs: ArrayVec<Framebuffer, COUNT>) -> Self {
+        Self {
+            framebuffer_write_resolved: fbs,
+        }
+    }
+
+    #[inline]
+    pub fn get_mut(&mut self) -> &mut [Framebuffer] {
+        &mut self.framebuffer_write_resolved
+    }
+
+    #[inline]
+    pub fn into_inner(self) -> ArrayVec<Framebuffer, COUNT> {
+        self.framebuffer_write_resolved
     }
 }
