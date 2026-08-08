@@ -4,7 +4,7 @@ use internals::imports::model::{MeshData, Model};
 use internals::samplers::context::with_acquired;
 use renderer::abstraction::context::{RequestedSamplers, RequestedWriters, TextureUnit};
 use renderer::abstraction::program::Program;
-use renderer::datatypes::Vertex;
+use renderer::datatypes::{Vertex, VertexHomogenous};
 use renderer::forward_pipeline::PipelineForward;
 use renderer::renderer::Renderer;
 use renderer::texture::Texture;
@@ -52,25 +52,31 @@ pub fn main() {
 
         let fb_id = renderer.framebuffer_store.create_framebuffer(WIDTH, HEIGHT);
 
+        let view = glam::camera::rh::view::look_at_mat4(
+            glam::Vec3::new(0.0, 2.0, 5.0), // eye
+            glam::Vec3::ZERO,               // target
+            glam::Vec3::Y,                  // up
+        );
+
+        let proj = glam::camera::rh::proj::opengl::perspective(60f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+
         let program = Program::new(
             |mut v: Vertex<MeshData>| {
                 let i = i.load(std::sync::atomic::Ordering::Relaxed);
+                let s = 0.5;
                 let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
                 let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
                 let y_axis = glam::vec3(0.0, 1.0, 0.0);
                 let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
-                let rot = glam::mat3(x_axis, y_axis, z_axis);
-
-                let trans = glam::Mat4::from_translation(glam::vec3(-0.2, 0.0, 0.0));
-                let p = glam::vec3(
-                    v.position.x / (16.0 / 9.0),
-                    v.position.y,
-                    v.position.z / (16.0 / 9.0),
+                let rot = glam::Quat::from_rotation_axes(x_axis, y_axis, z_axis);
+                let model = glam::Mat4::from_scale_rotation_translation(
+                    glam::vec3(s,s,s),
+                    rot,
+                    glam::vec3(-0.4, 0.0, 0.0),
                 );
-                let v3 = 1.0 * rot * p;
-                let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
-                v.position = glam::vec3(v4.x, v4.y, v4.z);
-                v
+                v.position = (proj * view * model * v.position.extend(1.0)).truncate();
+
+                VertexHomogenous::from_vertex(v, 1.0)
             },
             &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
                 let color =
@@ -84,22 +90,21 @@ pub fn main() {
         let program2 = Program::new(
             |mut v: Vertex<MeshData>| {
                 let i = i.load(std::sync::atomic::Ordering::Relaxed);
+                let s = 0.25;
                 let a: f32 = f32::consts::PI / 180.0 * (i % 360) as f32;
                 let x_axis = glam::vec3(a.cos(), 0.0, a.sin());
                 let y_axis = glam::vec3(0.0, 1.0, 0.0);
                 let z_axis = glam::vec3(-a.sin(), 0.0, a.cos());
-                let rot = glam::mat3(x_axis, y_axis, z_axis);
-
-                let trans = glam::Mat4::from_translation(glam::vec3(0.5, 0.2, 0.0));
-                let p = glam::vec3(
-                    v.position.x / (16.0 / 9.0),
-                    v.position.y,
-                    v.position.z / (16.0 / 9.0),
+                let rot = glam::Quat::from_rotation_axes(x_axis, y_axis, z_axis);
+                let model = glam::Mat4::from_scale_rotation_translation(
+                    glam::vec3(s,s,s),
+                    rot,
+                    glam::vec3(0.4, 0.0, 0.0),
                 );
-                let v3 = 0.4 * rot * p;
-                let v4 = trans * glam::vec4(v3.x, v3.y, v3.z, 1.0);
-                v.position = glam::vec3(v4.x, v4.y, v4.z);
-                v
+                
+                v.position = (proj * view * model * v.position.extend(1.0)).truncate();
+
+                VertexHomogenous::from_vertex(v, 1.0)
             },
             &[|v: &renderer::datatypes::FragmentInput<MeshData>, ctx| {
                 let color = ctx.sample_texture_fail_silent(
@@ -165,6 +170,7 @@ pub fn main() {
                 i.load(std::sync::atomic::Ordering::Relaxed) + 1,
                 std::sync::atomic::Ordering::Relaxed,
             );
+            // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 120));
         }
     });
 
@@ -193,7 +199,7 @@ pub fn main() {
         //     second_start = Instant::now();
         // }
         // frames += 1;
-        // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 120));
+        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 120));
     }
 }
 

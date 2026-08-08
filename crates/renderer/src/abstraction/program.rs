@@ -1,5 +1,5 @@
 use crate::{
-    abstraction::context::ResolvedSamplers, datatypes::{FragmentInput, Vertex}, framebuffer::MAX_BINDS, lerp::Lerp,
+    abstraction::context::ResolvedSamplers, datatypes::{FragmentInput, Vertex, VertexHomogenous}, framebuffer::MAX_BINDS, lerp::Lerp,
 };
 use glam::Vec4;
 use smallvec::SmallVec;
@@ -16,7 +16,7 @@ pub struct Program<T, VS, FS> {
 impl<T, VS, FS> Program<T, VS, FS>
 where
     T: Lerp + Copy + Debug + Send + Sync,
-    VS: Fn(Vertex<T>) -> Vertex<T> + Send + Sync,
+    VS: Fn(Vertex<T>) -> VertexHomogenous<T> + Send + Sync,
     FS: Fn(&FragmentInput<T>, &ResolvedSamplers<MAX_BINDS>) -> Vec4 + Send + Sync + Clone,
 {
     pub fn new(vertex_shader: VS, fragment_shaders: &[FS]) -> Self {

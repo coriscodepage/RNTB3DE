@@ -3,6 +3,50 @@ use std::{fs::File, path::Path};
 use glam::vec4;
 use renderer::texture::Texture;
 
+pub enum TextureLoadState {
+    Unloaded,
+    Loading,
+    Loaded(Texture),
+}
+
+pub enum TextureSrc {
+    Png(&'static str),
+}
+
+impl TextureSrc {
+    pub fn load(&self) -> Texture {
+        match self {
+            TextureSrc::Png(path) => from_png(path),
+        }
+    }
+}
+
+pub struct TextureStorage {
+    store: Vec<TextureHandle>,
+}
+
+pub struct TextureHandle {
+    state: TextureLoadState,
+    source: TextureSrc,
+    unused_count: u32,
+}
+
+impl TextureHandle {
+    pub fn new(source: TextureSrc) -> Self {
+        Self {
+            state: TextureLoadState::Unloaded,
+            source,
+            unused_count: 0,
+        }
+    }
+
+    pub fn load(&mut self) {
+        if matches!(self.state, TextureLoadState::Unloaded) {
+            self.state = TextureLoadState::Loaded(self.source.load())
+        }
+    }
+}
+
 pub fn from_png<P: AsRef<Path>>(path: P) -> Texture {
     let decoder = png::Decoder::new(std::io::BufReader::new(
         File::open::<P>(path.into()).unwrap(),

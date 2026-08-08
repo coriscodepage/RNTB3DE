@@ -116,7 +116,7 @@ impl Framebuffer {
         if self.generation[index] != self.current_generation {
             true
         } else {
-            depth < self.depth[index]
+            depth > self.depth[index]
         }
     }
 

@@ -51,7 +51,7 @@ impl Model<MeshData> {
             match split.next() {
                 Some(c) if c == "v" => {
                     let x = split.next().unwrap().parse::<f32>().unwrap();
-                    let y = split.next().unwrap().parse::<f32>().unwrap();
+                    let y = -split.next().unwrap().parse::<f32>().unwrap();
                     let z = -split.next().unwrap().parse::<f32>().unwrap();
                     vertices.push(Vec3::new(x, y, z));
                 }

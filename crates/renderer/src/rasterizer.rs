@@ -63,8 +63,10 @@ impl Rasterizer {
         let inv_area_wide = wide::f32x4::splat(inv_area);
 
         let mut y = bbminy.max(tile_min.y);
-        while y <= bbmaxy.min(tile_max.y) {
-
+        let min_bound_x = bbmaxx.min(tile_max.x);
+        let min_bound_y = bbmaxy.min(tile_max.y);
+        let wide_zero = wide::f32x4::zeroed();
+        while y <= min_bound_y {
             let mut w0_wide = wide::i32x4::from([
                 w0_row,
                 w0_row + delta_0x,
@@ -83,10 +85,8 @@ impl Rasterizer {
                 w2_row + delta_2x * 2,
                 w2_row + delta_2x * 3,
             ]);
-            let wide_zero = wide::f32x4::zeroed();
             let mut x = bbminx.max(tile_min.x);
-            while x <= bbmaxx.min(tile_max.x) {
-
+            while x <= min_bound_x {
                 let alpha_wide = w0_wide.round_float() * inv_area_wide;
                 let beta_wide = w1_wide.round_float() * inv_area_wide;
                 let gamma_wide = w2_wide.round_float() * inv_area_wide;
@@ -98,10 +98,12 @@ impl Rasterizer {
                 let inside_bits = inside.to_bitmask();
 
                 if inside_bits != 0 {
-                    let depth_wide = depth_a_wide * alpha_wide + depth_b_wide * beta_wide + depth_c_wide * gamma_wide;
+                    let depth_wide = depth_a_wide * alpha_wide
+                        + depth_b_wide * beta_wide
+                        + depth_c_wide * gamma_wide;
                     for lane in 0..4 {
                         let px = x + lane as i32;
-                        if px > bbmaxx.min(tile_max.x) {
+                        if px > min_bound_x {
                             break;
                         } else if inside_bits & (1 << lane) == 0 {
                             continue;
@@ -120,7 +122,6 @@ impl Rasterizer {
                 w0_wide += delta_0x_wide;
                 w1_wide += delta_1x_wide;
                 w2_wide += delta_2x_wide;
-
             }
             y += 1;
             w0_row += delta_0y;

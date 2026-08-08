@@ -15,6 +15,25 @@ impl<T: Lerp> Vertex<T> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct VertexHomogenous<T: Lerp> {
+    pub position: glam::Vec4,
+    pub data: T,
+}
+
+impl<T: Lerp> VertexHomogenous<T> {
+    pub fn new(position: glam::Vec4, data: T) -> Self {
+        Self { position, data }
+    }
+
+    pub fn from_vertex(vertex: Vertex<T>, w: f32) -> Self {
+        Self {
+            position: vertex.position.extend(w),
+            data: vertex.data,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct FragmentInput<T: Lerp> {
     pub position: glam::IVec2,
     pub depth: f32,

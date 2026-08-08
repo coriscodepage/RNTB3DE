@@ -13,7 +13,7 @@ use crate::{
         context::{ResolvedSamplers, ResolvedWriters},
         program::Program,
     },
-    datatypes::{FragmentInput, Triangle, Vertex},
+    datatypes::{FragmentInput, Triangle, Vertex, VertexHomogenous},
     framebuffer::{Framebuffer, MAX_BINDS, TILE_SIZE, Tile, TileBin, TilesInfo},
     lerp::Lerp,
     mesh::Mesh,
@@ -21,7 +21,9 @@ use crate::{
     renderer::morton,
 };
 use bumpalo::Bump;
-use glam::{IVec2, Vec2, Vec3, Vec4};
+use glam::{
+    IVec2, Vec2, Vec3, Vec4,
+};
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
@@ -31,6 +33,8 @@ use rayon::{
 };
 use std::fmt::Debug;
 
+// SAFETY: This is bad on many levels. We are taking a ref and coercing it into a mut via a pointer deref...
+#[derive(Debug, Clone, Copy)]
 struct SendPointer<T> {
     pointer: NonNull<T>,
 }
@@ -43,6 +47,11 @@ impl<T> SendPointer<T> {
 
     #[inline(always)]
     unsafe fn as_mut(&self) -> &mut T {
+        unsafe { &mut *self.pointer.as_ptr() }
+    }
+
+    #[inline(always)]
+    unsafe fn as_mut_ptr(&self) -> *mut T {
         unsafe { &mut *self.pointer.as_ptr() }
     }
 }
@@ -70,7 +79,7 @@ impl PipelineForward {
         mesh: &Mesh<T>,
     ) where
         T: Lerp + Copy + Debug + Send + Sync,
-        VS: Fn(Vertex<T>) -> Vertex<T> + Send + Sync,
+        VS: Fn(Vertex<T>) -> VertexHomogenous<T> + Send + Sync,
         FS: Fn(&FragmentInput<T>, &ResolvedSamplers<MAX_BINDS>) -> Vec4 + Send + Sync + Clone,
     {
         let framebuffers = writers.get_mut();
@@ -85,6 +94,7 @@ impl PipelineForward {
 
         let vertex_shader = program.vertex();
 
+
         let triangles: &mut [MaybeUninit<Triangle<T>>] = self
             .arena
             .alloc_slice_fill_clone(mesh.positions.len() / 3, &MaybeUninit::uninit());
@@ -96,10 +106,18 @@ impl PipelineForward {
                 let v0 = vertex_shader(Vertex::new(pos[0], data[0]));
                 let v1 = vertex_shader(Vertex::new(pos[1], data[1]));
                 let v2 = vertex_shader(Vertex::new(pos[2], data[2]));
-                let p0 = Self::to_screen_space(v0.position, screen_width, screen_height);
-                let p1 = Self::to_screen_space(v1.position, screen_width, screen_height);
-                let p2 = Self::to_screen_space(v2.position, screen_width, screen_height);
+
+                let ndc = [
+                    v0.position.truncate() / v0.position.w,
+                    v1.position.truncate() / v1.position.w,
+                    v2.position.truncate() / v2.position.w,
+                ];
+
+                let p0 = Self::to_screen_space(ndc[0], screen_width, screen_height);
+                let p1 = Self::to_screen_space(ndc[1], screen_width, screen_height);
+                let p2 = Self::to_screen_space(ndc[2], screen_width, screen_height);
                 match (p0, p1, p2) {
+                    // FIXME: We don't need this. We need to reject some other way. This is another branch in the hot loop.
                     (Some(p0), Some(p1), Some(p2)) => {
                         tri.write(Triangle {
                             position: [p0, p1, p2],
@@ -117,6 +135,7 @@ impl PipelineForward {
                 }
             });
 
+        // INFO: Same memory? What is going on really? We conjure a new let binding out of thin air.
         let triangles: &mut [Triangle<T>] = unsafe {
             std::slice::from_raw_parts_mut(
                 triangles.as_mut_ptr() as *mut Triangle<T>,
@@ -236,7 +255,6 @@ impl PipelineForward {
         bins.into_bump_slice_mut()
     }
 
-    #[inline]
     fn check_triangle<T: Lerp + Copy + Debug + Send + Sync, F: FnMut(usize)>(
         triangle: &Triangle<T>,
         rows: usize,
@@ -269,10 +287,10 @@ impl PipelineForward {
 
                     let tile_min = tile.min();
                     let tile_max = tile.max();
-                    if tile_min.x <= bb_min_x
-                        && tile_max.x >= bb_max_x
-                        && tile_min.y <= bb_min_y
-                        && tile_max.y >= bb_max_y
+                    if (tile_min.x <= bb_min_x)
+                        & (tile_max.x >= bb_max_x)
+                        & (tile_min.y <= bb_min_y)
+                        & (tile_max.y >= bb_max_y)
                     {
                         func(row * cols + col);
                         continue;
@@ -322,7 +340,7 @@ impl PipelineForward {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn furthest_point(tile_min: IVec2, tile_max: IVec2, x_normal: i32, y_normal: i32) -> IVec2 {
         IVec2::new(
             if x_normal >= 0 {
@@ -348,12 +366,16 @@ impl PipelineForward {
         return ((by - ay) * (bx + ax) + (cy - by) * (cx + bx) + (ay - cy) * (ax + cx));
     }
 
+    // fn project(v: Vec3, f: f32) -> Vec3 {
+    //     v * Mat4::from
+    // }
+
     #[inline(always)]
-    pub(crate) fn to_screen_space(position: Vec3, width: i32, height: i32) -> Option<IVec2> {
+    pub(crate) fn to_screen_space(ndc: Vec3, width: i32, height: i32) -> Option<IVec2> {
         // FIXME: This is a reject approach. This straight up won't work for a game engine.
         // TODO: Implement https://pl.wikipedia.org/wiki/Algorytm_Sutherlanda-Hodgmana
-        let x = (position.x + 1.0) * 0.5 * width as f32;
-        let y = (1.0 - (position.y + 1.0) * 0.5) * height as f32;
+        let x = (ndc.x + 1.0) * 0.5 * width as f32;
+        let y = (ndc.y + 1.0) * 0.5 * height as f32;
         if x < 0.0 || x > (width - 1) as f32 || y < 0.0 || y > (height - 1) as f32 {
             None
         } else {
