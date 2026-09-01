@@ -36,6 +36,7 @@ impl Lerp for MeshData {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Model<T: Lerp> {
     pub mesh: Mesh<T>,
 }

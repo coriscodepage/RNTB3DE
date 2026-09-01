@@ -2,13 +2,58 @@ use std::ops::{Deref, DerefMut};
 
 use arrayvec::ArrayVec;
 
-use itertools::Itertools;
 use renderer::{
     abstraction::context::{
-        RequestedSamplers, RequestedWriters, ResolvedSamplers, ResolvedWriters,
+        FramebufferUnit, RequestedWriters, ResolvedSamplers, ResolvedWriters, TextureUnit,
     },
-    renderer::{FramebufferStore, TextureStore},
+    framebuffer_storage::{FramebufferId, FramebufferStore},
 };
+
+use crate::samplers::texture::{TextureSrc, TextureStorage};
+
+#[derive(Debug, Clone)]
+pub struct RequestedSamplers<const COUNT: usize> {
+    texture_binds: ArrayVec<TextureSrc, COUNT>,
+    framebuffer_read_binds: ArrayVec<FramebufferId, COUNT>,
+}
+
+impl<'a, const COUNT: usize> RequestedSamplers<COUNT> {
+    pub fn new() -> Self {
+        Self {
+            texture_binds: ArrayVec::new(),
+            framebuffer_read_binds: ArrayVec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn bind_texture(&mut self, source: TextureSrc) -> Result<TextureUnit, &'static str> {
+        self.texture_binds
+            .try_push(source)
+            .map_err(|_| "No free binds left")?;
+        Ok(TextureUnit(self.texture_binds.len() - 1))
+    }
+
+    #[inline]
+    pub fn bind_framebuffers_read(
+        &mut self,
+        id: FramebufferId,
+    ) -> Result<FramebufferUnit, &'static str> {
+        self.framebuffer_read_binds
+            .try_push(id)
+            .map_err(|_| "No free binds left")?;
+        Ok(FramebufferUnit(self.framebuffer_read_binds.len() - 1))
+    }
+
+    #[inline]
+    pub fn get_texture_binds(&self) -> &[TextureSrc] {
+        &self.texture_binds
+    }
+
+    #[inline]
+    pub fn get_framebuffer_binds(&self) -> &[FramebufferId] {
+        &self.framebuffer_read_binds
+    }
+}
 
 pub struct RequestedWritersGuard<'a, const COUNT: usize> {
     fb_store: &'a mut FramebufferStore,
@@ -45,7 +90,7 @@ pub fn with_acquired<
     F: FnOnce(&ResolvedSamplers<COUNT>, &mut ResolvedWriters<COUNT>) -> R,
     R,
 >(
-    tex_store: &TextureStore,
+    tex_store: &mut TextureStorage,
     fb_store: &mut FramebufferStore,
     sampler_request: &RequestedSamplers<COUNT>,
     writer_request: &RequestedWriters<COUNT>,
@@ -66,9 +111,12 @@ pub fn with_acquired<
         .iter()
         .map(|&fb_req| fb_store.borrow_framebuffer(fb_req))
         .collect::<ArrayVec<_, COUNT>>();
+    sampler_texture_binds
+        .iter()
+        .for_each(|tex_req| tex_store.ensure_loaded(tex_req));
     let read_textures = sampler_texture_binds
         .iter()
-        .map(|&tex_req| tex_store.borrow_texture(tex_req))
+        .map(|tex_req| tex_store.get(&tex_req))
         .collect::<ArrayVec<_, COUNT>>();
     let samplers_resolved = ResolvedSamplers::new(read_fbs, read_textures);
     let mut writers_resolved = ResolvedWriters::new(write_fbs);

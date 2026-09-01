@@ -10,15 +10,9 @@ use wide::bytemuck;
 use crate::{framebuffer::Framebuffer, texture::Texture};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TextureId {
-    index: usize,
-    generation: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FramebufferId {
-    index: usize,
-    generation: u32,
+    pub index: usize,
+    pub generation: u32,
 }
 
 pub struct FramebufferStore {
@@ -89,62 +83,6 @@ impl FramebufferStore {
                 .as_mut()
                 .unwrap()
                 .clear(Vec4::new(0.0, 0.0, 0.0, 0.0));
-        }
-    }
-}
-
-pub struct TextureStore {
-    slots: Vec<Option<Texture>>,
-}
-
-impl TextureStore {
-    pub fn new() -> Self {
-        Self { slots: Vec::new() }
-    }
-
-    pub fn insert_texture(&mut self, tex: Texture) -> TextureId {
-        self.slots.push(Some(tex));
-        TextureId {
-            index: self.slots.len() - 1,
-            generation: 0,
-        }
-    }
-
-    pub(crate) fn take_texture(&mut self, id: TextureId) -> Texture {
-        if id.index >= self.slots.len() {
-            panic!("Invalid texture ID: {}", id.index);
-        } else {
-            self.slots[id.index].take().unwrap()
-        }
-    }
-
-    pub fn borrow_texture(&self, id: TextureId) -> &Texture {
-        if id.index >= self.slots.len() {
-            panic!("Invalid texture ID: {}", id.index);
-        } else {
-            self.slots[id.index].as_ref().unwrap()
-        }
-    }
-
-    pub(crate) fn put_texturte(&mut self, id: TextureId, tex: Texture) {
-        if id.index < self.slots.len() {
-            self.slots[id.index] = Some(tex);
-        } else {
-            panic!("Invalid texture ID: {}", id.index);
-        }
-    }
-}
-
-pub struct Renderer {
-    pub framebuffer_store: FramebufferStore,
-    pub texture_store: TextureStore,
-}
-
-impl Renderer {
-    pub fn new() -> Self {
-        Self {
-            framebuffer_store: FramebufferStore::new(),
-            texture_store: TextureStore::new(),
         }
     }
 }

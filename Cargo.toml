@@ -7,8 +7,8 @@ edition = "2024"
 sdl3 = "0.18.0"
 renderer = {path = "crates/renderer"}
 internals = {path = "crates/internals"}
-glam = "0.33.2"
-bytemuck = "1.25.0"
+glam = "0.33.3"
+bytemuck = "1.25.2"
 
 [workspace]
 resolver = "3"

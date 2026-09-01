@@ -18,7 +18,7 @@ use crate::{
     lerp::Lerp,
     mesh::Mesh,
     rasterizer::Rasterizer,
-    renderer::morton,
+    framebuffer_storage::morton,
 };
 use bumpalo::Bump;
 use glam::{
@@ -71,16 +71,20 @@ impl PipelineForward {
         }
     }
 
-    pub fn assemble_and_run<T, VS, FS>(
+    pub fn assemble_and_run<T, D, N, VS, FS>(
         &mut self,
         samplers: &ResolvedSamplers<MAX_BINDS>,
         writers: &mut ResolvedWriters<MAX_BINDS>,
-        program: &Program<T, VS, FS>,
+        program: &Program<T, D, N, VS, FS>,
+        uniforms_vertex: D,
+        uniforms_fragment: N,
         mesh: &Mesh<T>,
     ) where
         T: Lerp + Copy + Debug + Send + Sync,
-        VS: Fn(Vertex<T>) -> VertexHomogenous<T> + Send + Sync,
-        FS: Fn(&FragmentInput<T>, &ResolvedSamplers<MAX_BINDS>) -> Vec4 + Send + Sync + Clone,
+        D: Send + Sync,
+        N: Send + Sync,
+        VS: Fn(Vertex<T>, &D) -> VertexHomogenous<T> + Send + Sync,
+        FS: Fn(&FragmentInput<T>, &ResolvedSamplers<MAX_BINDS>, &N) -> Vec4 + Send + Sync + Clone,
     {
         let framebuffers = writers.get_mut();
         if framebuffers.len() != program.fragment().len() {
@@ -103,9 +107,9 @@ impl PipelineForward {
             .zip(mesh.positions.par_chunks_exact(3))
             .zip(mesh.data.par_chunks_exact(3))
             .for_each(|((tri, pos), data)| {
-                let v0 = vertex_shader(Vertex::new(pos[0], data[0]));
-                let v1 = vertex_shader(Vertex::new(pos[1], data[1]));
-                let v2 = vertex_shader(Vertex::new(pos[2], data[2]));
+                let v0 = vertex_shader(Vertex::new(pos[0], data[0]), &uniforms_vertex);
+                let v1 = vertex_shader(Vertex::new(pos[1], data[1]), &uniforms_vertex);
+                let v2 = vertex_shader(Vertex::new(pos[2], data[2]), &uniforms_vertex);
 
                 let ndc = [
                     v0.position.truncate() / v0.position.w,
@@ -173,7 +177,7 @@ impl PipelineForward {
                             )
                         } {
                             let frag_color =
-                                fragment_shader(&fragment, unsafe { ctx_ptr.as_mut() });
+                                fragment_shader(&fragment, unsafe { ctx_ptr.as_mut() }, &uniforms_fragment);
                             unsafe {
                                 fb_ptr.as_mut().write_fragment(
                                     fragment.position.x,

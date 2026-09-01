@@ -2,6 +2,7 @@ use glam::Vec3;
 
 use crate::{datatypes::Vertex, lerp::Lerp};
 
+#[derive(Debug, Clone)]
 pub struct Mesh<T: Lerp> {
     pub(crate) positions: Vec<Vec3>,
     pub(crate) data: Vec<T>,

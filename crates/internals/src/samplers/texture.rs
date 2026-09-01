@@ -1,7 +1,9 @@
-use std::{fs::File, path::Path};
+use std::{collections::HashMap, fs::File, path::Path};
 
 use glam::vec4;
 use renderer::texture::Texture;
+
+const MAX_UNUSED_COUNT: u32 = 10;
 
 pub enum TextureLoadState {
     Unloaded,
@@ -9,6 +11,7 @@ pub enum TextureLoadState {
     Loaded(Texture),
 }
 
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum TextureSrc {
     Png(&'static str),
 }
@@ -22,28 +25,77 @@ impl TextureSrc {
 }
 
 pub struct TextureStorage {
-    store: Vec<TextureHandle>,
+    store: HashMap<TextureSrc, TextureHandle>,
+}
+
+impl TextureStorage {
+    pub fn new() -> Self {
+        Self {
+            store: HashMap::new(),
+        }
+    }
+
+    pub fn add(&mut self, source: TextureSrc) {
+        self.store.insert(source, TextureHandle::new());
+    }
+
+    pub fn tick(&mut self) {
+        self.store.iter_mut().for_each(|(_, texture)| {
+            if matches!(texture.state, TextureLoadState::Loaded(_)) {
+                texture.unused_count += 1;
+                if texture.unused_count >= MAX_UNUSED_COUNT {
+                    texture.unload();
+                }
+            }
+        });
+    }
+
+    fn load(&mut self, query: &TextureSrc) {
+        if let Some(texture) = self.store.get_mut(query) {
+            if matches!(texture.state, TextureLoadState::Unloaded) {
+                let tex = query.load();
+                texture.state = TextureLoadState::Loaded(tex);
+                texture.unused_count = 0;
+            }
+        }
+    }
+
+    pub fn ensure_loaded(&mut self, query: &TextureSrc) {
+        let needs_load = self
+            .store
+            .get(query)
+            .map(|tex| matches!(tex.state, TextureLoadState::Unloaded))
+            .unwrap();
+
+        if needs_load {
+            self.load(query);
+        }
+    }
+
+    pub fn get(&self, query: &TextureSrc) -> &Texture {
+        match &self.store.get(query).unwrap().state {
+            TextureLoadState::Unloaded | TextureLoadState::Loading => panic!(),
+            TextureLoadState::Loaded(texture) => texture,
+        }
+    }
 }
 
 pub struct TextureHandle {
     state: TextureLoadState,
-    source: TextureSrc,
     unused_count: u32,
 }
 
 impl TextureHandle {
-    pub fn new(source: TextureSrc) -> Self {
+    pub fn new() -> Self {
         Self {
             state: TextureLoadState::Unloaded,
-            source,
             unused_count: 0,
         }
     }
 
-    pub fn load(&mut self) {
-        if matches!(self.state, TextureLoadState::Unloaded) {
-            self.state = TextureLoadState::Loaded(self.source.load())
-        }
+    pub fn unload(&mut self) {
+        self.state = TextureLoadState::Unloaded;
+        self.unused_count = 0;
     }
 }
 
