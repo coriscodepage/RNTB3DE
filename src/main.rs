@@ -3,25 +3,22 @@ use core::f32;
 use internals::dag::render_command::{Renderer, RendererHandle};
 use internals::imports::model::{MeshData, Model};
 use internals::samplers::context::{RequestedSamplers, with_acquired};
-use internals::samplers::texture::{TextureSrc, TextureStorage};
+use internals::samplers::texture::TextureSrc;
+use internals::systems::{System, SystemHandler};
 use internals::world::World;
-use internals::world::material::{Material, MaterialHandle, StdProgram};
+use internals::world::material::{Material, MaterialHandle};
 use internals::world::transform::Transform;
 use renderer::abstraction::camera::Camera;
 use renderer::abstraction::context::{RequestedWriters, TextureUnit};
-use renderer::abstraction::program::{Program, ProgramStorage};
+use renderer::abstraction::program::Program;
 use renderer::datatypes::{Vertex, VertexHomogenous};
 use renderer::forward_pipeline::PipelineForward;
-use renderer::framebuffer_storage::FramebufferStore;
-use renderer::texture::Texture;
 use sdl3::event::Event;
 use sdl3::keyboard::Keycode;
-use std::cell::RefCell;
 use std::fs::{self};
-use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::mpsc::channel;
+use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -49,7 +46,8 @@ pub fn main() {
     // texture_store.add(source1);
 
     let render_present = presentation.clone();
-    let mut world = World::new();
+    let world = World::new();
+    let world = Arc::new(RwLock::new(world));
     let (tx, rx) = channel();
     let mut render_handle = RendererHandle::new(tx);
     let fb_id = render_handle.create_framebuffer(WIDTH, HEIGHT);
@@ -69,7 +67,6 @@ pub fn main() {
     );
 
     let i = Arc::new(AtomicI32::new(0));
-    let l_i = i.clone();
     let program = Program::new(
         move |mut v: Vertex<MeshData>, uni: &(glam::Mat4, glam::Mat4, glam::Mat4)| {
             // let i = l_i.load(std::sync::atomic::Ordering::Relaxed);
@@ -83,7 +80,7 @@ pub fn main() {
             move |v: &renderer::datatypes::FragmentInput<MeshData>, ctx, _: &()| {
                 // let i = l_i.load(std::sync::atomic::Ordering::Relaxed);
                 let color =
-                ctx.sample_texture(TextureUnit(0), v.data.texture_uv.x, v.data.texture_uv.y);
+                    ctx.sample_texture(TextureUnit(0), v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = texture.sample(v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = glam::vec4(1.0, 1.0, 1.0, 1.0);
                 color
@@ -103,21 +100,52 @@ pub fn main() {
     let material = Material::new(handle, samplers, writers);
     let material_handle = render_handle.create_material(material);
 
-    world.place_model_with_transform(model1.clone(), transform1, material_handle);
+    world
+        .write()
+        .unwrap()
+        .place_model_with_transform(model1.clone(), transform1, material_handle);
 
-    world.place_model_with_transform(model1, transform2, material_handle);
+    world
+        .write()
+        .unwrap()
+        .place_model_with_transform(model1, transform2, material_handle);
 
+    let mut system_handler = SystemHandler::new();
+
+    struct TestSystem {
+        i: usize,
+    };
+
+    impl System for TestSystem {
+        fn update(&mut self, world: &mut World, dt: u32) {
+            world.with_world_mut(|q| {
+                let camera = q.query_mut::<&mut Camera>().into_iter().next().unwrap();
+                *camera = Camera::new(
+                    glam::Vec3::new(0.0, 1.0, 5.0),
+                    glam::vec3(2.0 - (( self.i % 20)as f32) / 10.0, 0.0, 0.0),
+                    glam::Vec3::Y,
+                );
+            });
+            self.i += 1;
+        }
+    }
+
+    let view = Camera::new(
+        glam::Vec3::new(0.0, 0.0, 5.0),
+        glam::Vec3::ZERO,
+        glam::Vec3::Y,
+    );
+
+    world.write().unwrap().place_entity((view,));
+
+    system_handler.register(TestSystem{i: 0});
+
+    let read_world = world.clone();
     thread::spawn(move || {
         let mut frames_r = 0;
 
         // let mut framebuffer_store = FramebufferStore::new();
         let mut renderer = Renderer::new(rx);
-
-        let view = Camera::new(
-            glam::Vec3::new(0.0, 0.0, 5.0),
-            glam::Vec3::ZERO,
-            glam::Vec3::Y,
-        );
 
         let proj: glam::prelude::Mat4 =
             glam::camera::rh::proj::opengl::perspective(75f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
@@ -129,9 +157,11 @@ pub fn main() {
 
         loop {
             renderer.poll_commands();
-            renderer.framebuffer_store.clear_framebuffer(fb_id);
+            renderer.framebuffer_store.clear_all_framebuffers();
 
-            world.with_world(|m| {
+            read_world.read().unwrap().with_world(|m| {
+                let mut binding = m.query::<&Camera>();
+                let camera = binding.iter().next().unwrap();
                 for (model, transform, &material_handle) in m
                     .query::<(&Model<MeshData>, &Transform, &MaterialHandle)>()
                     .iter()
@@ -148,7 +178,7 @@ pub fn main() {
                                 &mut pipeline,
                                 samplers_resolved,
                                 writers_resolved,
-                                (proj, view.to_mat4(), transform.to_mat4()),
+                                (proj, camera.to_mat4(), transform.to_mat4()),
                                 (),
                                 &model.mesh,
                             );
@@ -187,7 +217,7 @@ pub fn main() {
                 _ => {}
             }
         }
-
+        system_handler.update(&mut world.write().unwrap());
         let mut win_surf = window.surface(&event_pump).unwrap();
         let pixels = unsafe { win_surf.without_lock_mut().unwrap() };
         presentation.read(|framebuffer| framebuffer.buffer_to_u8(bytemuck::cast_slice_mut(pixels)));

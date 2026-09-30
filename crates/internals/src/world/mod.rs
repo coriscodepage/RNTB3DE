@@ -1,8 +1,13 @@
-use hecs::Entity;
+use hecs::{DynamicBundle, Entity};
 use renderer::lerp::Lerp;
 
 use crate::{
-    imports::model::{MeshData, Model}, world::{material::{Material, MaterialHandle}, transform::Transform},
+    imports::model::{MeshData, Model},
+    systems::SystemHandler,
+    world::{
+        material::{Material, MaterialHandle},
+        transform::Transform,
+    },
 };
 use std::fmt::Debug;
 pub mod material;
@@ -28,7 +33,15 @@ impl World {
         self.world.spawn((model, transform, material))
     }
 
+    pub fn place_entity<E: DynamicBundle>(&mut self, entity: E) {
+        self.world.spawn(entity);
+    }
+
     pub fn with_world<F: FnOnce(&hecs::World) -> R, R>(&self, f: F) -> R {
         f(&self.world)
+    }
+
+        pub fn with_world_mut<F: FnOnce(&mut hecs::World) -> R, R>(&mut self, f: F) -> R {
+        f(&mut self.world)
     }
 }

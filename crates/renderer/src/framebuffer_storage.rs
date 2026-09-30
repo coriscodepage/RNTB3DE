@@ -75,6 +75,7 @@ impl FramebufferStore {
         }
     }
 
+    #[inline]
     pub fn clear_framebuffer(&mut self, id: FramebufferId) {
         if id.index >= self.slots.len() {
             panic!("Invalid framebuffer ID: {}", id.index);
@@ -83,6 +84,15 @@ impl FramebufferStore {
                 .as_mut()
                 .unwrap()
                 .clear(Vec4::new(0.0, 0.0, 0.0, 0.0));
+        }
+    }
+
+    #[inline]
+    pub fn clear_all_framebuffers(&mut self) {
+        for slot in &mut self.slots {
+            if let Some(fb) = slot {
+                fb.clear(Vec4::new(0.0, 0.0, 0.0, 0.0));
+            }
         }
     }
 }
