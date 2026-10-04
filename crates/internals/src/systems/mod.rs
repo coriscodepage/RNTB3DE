@@ -1,26 +1,30 @@
-use crate::world::World;
+use crate::{resources::Resources, world::World};
 
-pub trait System {
-    fn update(&mut self, world: &mut World, dt: u32);
+pub trait System<A: std::hash::Hash + std::cmp::Eq + Copy> {
+    fn update(&mut self, world: &mut World, resources: &Resources<A>);
 }
 
-pub struct SystemHandler {
-    systems: Vec<Box<dyn System>>,
+pub struct SystemHandler<A: std::hash::Hash + std::cmp::Eq + Copy> {
+    systems: Vec<Box<dyn System<A>>>,
 }
 
-impl SystemHandler {
+impl<A> SystemHandler<A>
+where
+    A: std::hash::Hash + std::cmp::Eq + Copy,
+{
     pub fn new() -> Self {
         Self {
             systems: Vec::new(),
         }
     }
 
-    pub fn update(&mut self, world: &mut World) {
-        let dt = 0;
-        self.systems.iter_mut().for_each(|s| s.update(world, dt));
+    pub fn update(&mut self, world: &mut World, resources: &mut Resources<A>) {
+        self.systems
+            .iter_mut()
+            .for_each(|s: &mut Box<dyn System<A> + 'static>| s.update(world, resources));
     }
 
-    pub fn register<S: System + 'static>(&mut self, system: S) {
+    pub fn register<S: System<A> + 'static>(&mut self, system: S) {
         self.systems.push(Box::new(system));
     }
 }

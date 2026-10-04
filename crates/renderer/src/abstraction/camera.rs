@@ -1,5 +1,6 @@
 use glam::{Mat4, Vec3};
 
+#[derive(Debug)]
 pub struct Camera {
     eye: Vec3,
     center: Vec3,
@@ -17,5 +18,9 @@ impl Camera {
             self.center, // target
             self.up,     // up
         )
+    }
+
+    pub fn move_forward(&mut self, speed: f32) {
+        self.eye.z += speed; // FIXME: This is just plain wrong
     }
 }

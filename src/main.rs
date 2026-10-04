@@ -1,7 +1,9 @@
 mod presentation;
+mod sdl_layer;
 use core::f32;
 use internals::dag::render_command::{Renderer, RendererHandle};
 use internals::imports::model::{MeshData, Model};
+use internals::resources::Resources;
 use internals::samplers::context::{RequestedSamplers, with_acquired};
 use internals::samplers::texture::TextureSrc;
 use internals::systems::{System, SystemHandler};
@@ -16,7 +18,6 @@ use renderer::forward_pipeline::PipelineForward;
 use sdl3::event::Event;
 use sdl3::keyboard::Keycode;
 use std::fs::{self};
-use std::sync::atomic::AtomicI32;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -66,19 +67,15 @@ pub fn main() {
         glam::vec3(1.0, 1.0, 1.0),
     );
 
-    let i = Arc::new(AtomicI32::new(0));
     let program = Program::new(
         move |mut v: Vertex<MeshData>, uni: &(glam::Mat4, glam::Mat4, glam::Mat4)| {
-            // let i = l_i.load(std::sync::atomic::Ordering::Relaxed);
-
             let &(proj, view, model) = uni;
-            v.position = (proj * view * model * v.position.extend(1.0)).truncate();
-
-            VertexHomogenous::from_vertex(v, 1.0)
+            let full_pos = proj * view * model * v.position.extend(1.0);
+            v.position = full_pos.truncate();
+            VertexHomogenous::from_vertex(v, full_pos.w)
         },
         &[
             move |v: &renderer::datatypes::FragmentInput<MeshData>, ctx, _: &()| {
-                // let i = l_i.load(std::sync::atomic::Ordering::Relaxed);
                 let color =
                     ctx.sample_texture(TextureUnit(0), v.data.texture_uv.x, v.data.texture_uv.y);
                 // let color = texture.sample(v.data.texture_uv.x, v.data.texture_uv.y);
@@ -112,21 +109,27 @@ pub fn main() {
 
     let mut system_handler = SystemHandler::new();
 
-    struct TestSystem {
-        i: usize,
-    };
+    struct InputSystem;
 
-    impl System for TestSystem {
-        fn update(&mut self, world: &mut World, dt: u32) {
-            world.with_world_mut(|q| {
-                let camera = q.query_mut::<&mut Camera>().into_iter().next().unwrap();
-                *camera = Camera::new(
-                    glam::Vec3::new(0.0, 1.0, 5.0),
-                    glam::vec3(2.0 - (( self.i % 20)as f32) / 10.0, 0.0, 0.0),
-                    glam::Vec3::Y,
-                );
+    impl System<()> for InputSystem {
+        fn update(&mut self, world: &mut World, resources: &Resources<()>) {
+            world.with_world_mut(|w| {
+                for camera in w.query_mut::<&mut Camera>() {
+                    if resources
+                        .input_state
+                        .key_state(&internals::input::Scancode::W)
+                        == internals::input::KeyState::Held
+                    {
+                        camera.move_forward(-0.1);
+                    } else if resources
+                        .input_state
+                        .key_state(&internals::input::Scancode::S)
+                        == internals::input::KeyState::Held
+                    {
+                        camera.move_forward(0.1);
+                    }
+                }
             });
-            self.i += 1;
         }
     }
 
@@ -138,7 +141,7 @@ pub fn main() {
 
     world.write().unwrap().place_entity((view,));
 
-    system_handler.register(TestSystem{i: 0});
+    system_handler.register(InputSystem);
 
     let read_world = world.clone();
     thread::spawn(move || {
@@ -148,7 +151,7 @@ pub fn main() {
         let mut renderer = Renderer::new(rx);
 
         let proj: glam::prelude::Mat4 =
-            glam::camera::rh::proj::opengl::perspective(75f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+            glam::camera::rh::proj::opengl::perspective(45f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
 
         // let texture = internals::samplers::texture::from_png("african_head_diffuse.png");
         // let tex_id_1 = renderer.texture_store.insert_texture(texture);
@@ -196,13 +199,11 @@ pub fn main() {
             }
             frames_r += 1;
 
-            i.store(
-                i.load(std::sync::atomic::Ordering::Relaxed) + 1,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            // ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 120));
+            ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 90));
         }
     });
+
+    let mut resources = Resources::<()>::new();
 
     'running: loop {
         for event in event_pump.poll_iter() {
@@ -214,15 +215,57 @@ pub fn main() {
                 } => {
                     break 'running;
                 }
+                Event::KeyDown {
+                    scancode: Some(scancode),
+                    repeat: false,
+                    ..
+                } => {
+                    let scancode = sdl_layer::scancode_from_sdl3(scancode);
+                    resources.input_state.key_down(scancode);
+                }
+                Event::KeyUp {
+                    scancode: Some(scancode),
+                    repeat: false,
+                    ..
+                } => {
+                    let scancode = sdl_layer::scancode_from_sdl3(scancode);
+                    resources.input_state.key_up(scancode);
+                }
+                Event::MouseMotion {
+                    x, y, xrel, yrel, ..
+                } => {
+                    resources.input_state.mouse_motion(x, y, xrel, yrel);
+                }
+                Event::MouseButtonDown { mouse_btn, .. } => {
+                    let button = sdl_layer::mouse_button_from_sdl3(mouse_btn);
+                    resources.input_state.mouse_down(button);
+                }
+                Event::MouseButtonUp { mouse_btn, .. } => {
+                    let button = sdl_layer::mouse_button_from_sdl3(mouse_btn);
+                    resources.input_state.mouse_up(button);
+                }
+                Event::MouseWheel {
+                    timestamp,
+                    window_id,
+                    which,
+                    x,
+                    y,
+                    direction,
+                    mouse_x,
+                    mouse_y,
+                    integer_x,
+                    integer_y,
+                } => {}
                 _ => {}
             }
         }
-        system_handler.update(&mut world.write().unwrap());
+        system_handler.update(&mut world.write().unwrap(), &mut resources);
         let mut win_surf = window.surface(&event_pump).unwrap();
         let pixels = unsafe { win_surf.without_lock_mut().unwrap() };
+        resources.input_state.clear();
         presentation.read(|framebuffer| framebuffer.buffer_to_u8(bytemuck::cast_slice_mut(pixels)));
         win_surf.update_window().unwrap();
-        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 120));
+        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
     }
 }
 
