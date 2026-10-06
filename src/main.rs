@@ -2,10 +2,10 @@ mod presentation;
 mod sdl_layer;
 use core::f32;
 use internals::dag::render_command::{Renderer, RendererHandle};
-use internals::imports::model::{MeshData, Model};
+use internals::imports::model::{MeshData, Model, ModelHandle, ModelStorage};
 use internals::resources::Resources;
 use internals::samplers::context::{RequestedSamplers, with_acquired};
-use internals::samplers::texture::TextureSrc;
+use internals::samplers::texture::{TextureSrc, TextureStorage};
 use internals::systems::{System, SystemHandler};
 use internals::world::World;
 use internals::world::material::{Material, MaterialHandle};
@@ -38,13 +38,10 @@ pub fn main() {
     let mut event_pump = sdl_context.event_pump().unwrap();
 
     let mut second_start = Instant::now();
-    // let mut frames = 0;
 
     let presentation = Arc::new(PresentationBuffer::new(WIDTH, HEIGHT));
-    // let mut texture_store = TextureStorage::new();
 
     let source1 = TextureSrc::Png("african_head_diffuse.png");
-    // texture_store.add(source1);
 
     let render_present = presentation.clone();
     let world = World::new();
@@ -55,6 +52,7 @@ pub fn main() {
     render_handle.create_texture(source1);
     let file = fs::read_to_string("african_head.obj").unwrap();
     let model1 = Model::from_obj_string(&file);
+    let model_handle = render_handle.create_model(model1);
     let transform1 = Transform::new(
         glam::vec3(0.0, 0.0, 0.0),
         glam::quat(0.0, 0.0, 0.0, 0.0),
@@ -100,12 +98,12 @@ pub fn main() {
     world
         .write()
         .unwrap()
-        .place_model_with_transform(model1.clone(), transform1, material_handle);
+        .place_model_with_transform(model_handle, transform1, material_handle);
 
-    world
-        .write()
-        .unwrap()
-        .place_model_with_transform(model1, transform2, material_handle);
+    // world
+    //     .write()
+    //     .unwrap()
+    //     .place_model_with_transform(model1, transform2, material_handle);
 
     let mut system_handler = SystemHandler::new();
 
@@ -120,24 +118,40 @@ pub fn main() {
                         .key_state(&internals::input::Scancode::W)
                         == internals::input::KeyState::Held
                     {
-                        camera.move_forward(-0.1);
+                        camera.move_forward(0.1);
                     } else if resources
                         .input_state
                         .key_state(&internals::input::Scancode::S)
                         == internals::input::KeyState::Held
                     {
-                        camera.move_forward(0.1);
+                        camera.move_back(0.1);
+                    } else if resources
+                        .input_state
+                        .key_state(&internals::input::Scancode::D)
+                        == internals::input::KeyState::Held
+                    {
+                        camera.move_right(0.1)
+                    } else if resources
+                        .input_state
+                        .key_state(&internals::input::Scancode::A)
+                        == internals::input::KeyState::Held
+                    {
+                        camera.move_left(0.1);
                     }
+                    let (mx, my) = resources.input_state.mouse_delta();
+                    camera.mouse_look(mx, my);
                 }
             });
         }
     }
 
-    let view = Camera::new(
+    let mut view = Camera::new(
         glam::Vec3::new(0.0, 0.0, 5.0),
-        glam::Vec3::ZERO,
+        glam::Vec3::NEG_Z,
         glam::Vec3::Y,
     );
+
+    view.activate();
 
     world.write().unwrap().place_entity((view,));
 
@@ -161,12 +175,11 @@ pub fn main() {
         loop {
             renderer.poll_commands();
             renderer.framebuffer_store.clear_all_framebuffers();
-
             read_world.read().unwrap().with_world(|m| {
                 let mut binding = m.query::<&Camera>();
-                let camera = binding.iter().next().unwrap();
+                let camera = binding.iter().find(|c| c.active()).unwrap();
                 for (model, transform, &material_handle) in m
-                    .query::<(&Model<MeshData>, &Transform, &MaterialHandle)>()
+                    .query::<(&ModelHandle, &Transform, &MaterialHandle)>()
                     .iter()
                 {
                     let material = renderer.material_store.get(material_handle);
@@ -177,6 +190,7 @@ pub fn main() {
                         material.get_writers(),
                         |samplers_resolved, writers_resolved| {
                             let program = renderer.program_store.get(material.get_handle());
+                            let model = renderer.model_store.get(model);
                             program.run_forward(
                                 &mut pipeline,
                                 samplers_resolved,

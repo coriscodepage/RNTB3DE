@@ -1,4 +1,7 @@
-use std::ops::{Add, Mul};
+use std::{
+    collections::HashMap,
+    ops::{Add, Div, Mul},
+};
 
 use glam::{Vec2, Vec3};
 use renderer::{datatypes::Vertex, lerp::Lerp, mesh::Mesh};
@@ -28,6 +31,16 @@ impl Mul<f32> for MeshData {
     }
 }
 
+impl Div<f32> for MeshData {
+    type Output = Self;
+
+    fn div(self, rhs: f32) -> Self::Output {
+        Self {
+            texture_uv: self.texture_uv / rhs,
+        }
+    }
+}
+
 impl Lerp for MeshData {
     fn lerp(&self, other: &Self, t: f32) -> Self {
         Self {
@@ -42,6 +55,14 @@ pub struct Model<T: Lerp> {
 }
 
 impl Model<MeshData> {
+    pub fn from_verts(tris: &[[Vertex<MeshData>; 3]]) -> Self {
+        let mut vertices = Vec::new();
+        tris.iter()
+            .for_each(|tri| tri.iter().for_each(|&v| vertices.push(v)));
+        Self {
+            mesh: Mesh::new(vertices, None),
+        }
+    }
     pub fn from_obj_string(input: &str) -> Self {
         let mut vertices = Vec::new();
         let mut texture_vertices = Vec::new();
@@ -52,7 +73,7 @@ impl Model<MeshData> {
             match split.next() {
                 Some(c) if c == "v" => {
                     let x = split.next().unwrap().parse::<f32>().unwrap();
-                    let y = -split.next().unwrap().parse::<f32>().unwrap();
+                    let y = split.next().unwrap().parse::<f32>().unwrap();
                     let z = -split.next().unwrap().parse::<f32>().unwrap();
                     vertices.push(Vec3::new(x, y, z));
                 }
@@ -82,33 +103,64 @@ impl Model<MeshData> {
         }
         let verts = if !texture_indices.is_empty() {
             indices
-            .iter()
-            .zip(texture_indices.iter())
-            .map(|(v, t)| {
-                Vertex::new(
-                    vertices[*v as usize],
-                    MeshData {
-                        texture_uv: texture_vertices[*t as usize],
-                    },
-                )
-            })
-            .collect::<Vec<_>>()
+                .iter()
+                .zip(texture_indices.iter())
+                .map(|(v, t)| {
+                    Vertex::new(
+                        vertices[*v as usize],
+                        MeshData {
+                            texture_uv: texture_vertices[*t as usize],
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
         } else {
             indices
-            .iter()
-            .map(|v| {
-                Vertex::new(
-                    vertices[*v as usize],
-                    MeshData {
-                        texture_uv: Vec2::new(f32::NAN, f32::NAN),
-                    },
-                )
-            })
-            .collect::<Vec<_>>()
+                .iter()
+                .map(|v| {
+                    Vertex::new(
+                        vertices[*v as usize],
+                        MeshData {
+                            texture_uv: Vec2::new(f32::NAN, f32::NAN),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
         };
-         
+
         Self {
             mesh: Mesh::new(verts, None),
         }
+    }
+}
+
+pub enum ModelLoadState<T: Lerp> {
+    Unloaded,
+    Loading,
+    Loaded(Model<T>),
+}
+
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub struct ModelHandle(pub usize);
+
+pub struct ModelStorage<T: Lerp> {
+    store: Vec<Model<T>>,
+}
+
+impl<T: Lerp> ModelStorage<T> {
+    pub fn new() -> Self {
+        Self {
+            store: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, model: Model<T>) -> ModelHandle {
+        let handle = ModelHandle(self.store.len());
+        self.store.push(model);
+        handle
+    }
+
+    pub fn get(&self, index: &ModelHandle) -> &Model<T> {
+        &self.store[index.0]
     }
 }

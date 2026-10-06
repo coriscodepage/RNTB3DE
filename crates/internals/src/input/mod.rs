@@ -76,7 +76,8 @@ impl Inputstate {
     }
 
     pub fn mouse_motion(&mut self, x: f32, y: f32, x_rel: f32, y_rel: f32) {
-        self.mouse_delta = (x_rel, y_rel);
+        self.mouse_delta.0 += x_rel;
+        self.mouse_delta.1 += y_rel;
         self.mouse_pos = (x, y);
     }
 
@@ -98,6 +99,10 @@ impl Inputstate {
         } else {
             KeyState::Up
         }
+    }
+
+    pub fn mouse_delta(&self) -> (f32, f32) {
+        self.mouse_delta
     }
 }
 

@@ -1,6 +1,8 @@
-use std::ops::{Add, Mul};
+use std::ops::{Add, Div, Mul};
 
-pub trait Lerp: Mul<f32, Output = Self> + Add<Output = Self> + Copy {
+pub trait Lerp:
+    Mul<f32, Output = Self> + Add<Output = Self> + Copy + Div<f32, Output = Self> + Copy
+{
     fn lerp(&self, other: &Self, t: f32) -> Self;
 }
 

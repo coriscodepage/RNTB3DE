@@ -111,11 +111,16 @@ impl Rasterizer {
                         let alpha = alpha_wide.as_array()[lane];
                         let beta = beta_wide.as_array()[lane];
                         let gamma = gamma_wide.as_array()[lane];
+
+                        let inv_w = triangle.depth[0].y * alpha
+                            + triangle.depth[1].y * beta
+                            + triangle.depth[2].y * gamma;
+                        
                         let data = triangle.data[0] * alpha
                             + triangle.data[1] * beta
                             + triangle.data[2] * gamma;
                         let depth = depth_wide.as_array()[lane];
-                        (callback)(FragmentInput::new(IVec2::new(px, y), depth, data));
+                        (callback)(FragmentInput::new(IVec2::new(px, y), depth, data / inv_w));
                     }
                 }
                 x += 4;

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs::File, path::Path};
 
 use glam::vec4;
+use png::ColorType;
 use renderer::texture::Texture;
 
 const MAX_UNUSED_COUNT: u32 = 10;
@@ -111,6 +112,7 @@ pub fn from_png<P: AsRef<Path>>(path: P) -> Texture {
         .copied()
         .map(|c| c as f32 / 255.0)
         .collect::<Vec<f32>>();
+    debug_assert_eq!(info.color_type, ColorType::Rgb);
     let texture: &[[f32; 3]] = bytemuck::cast_slice(&binding);
     let color = texture
         .iter()

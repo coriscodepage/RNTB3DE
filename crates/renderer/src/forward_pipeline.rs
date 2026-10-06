@@ -15,15 +15,13 @@ use crate::{
     },
     datatypes::{FragmentInput, Triangle, Vertex, VertexHomogenous},
     framebuffer::{Framebuffer, MAX_BINDS, TILE_SIZE, Tile, TileBin, TilesInfo},
+    framebuffer_storage::morton,
     lerp::Lerp,
     mesh::Mesh,
     rasterizer::Rasterizer,
-    framebuffer_storage::morton,
 };
 use bumpalo::Bump;
-use glam::{
-    IVec2, Vec2, Vec3, Vec4,
-};
+use glam::{IVec2, Vec2, Vec3, Vec4};
 use rayon::{
     iter::{
         IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator,
@@ -98,7 +96,6 @@ impl PipelineForward {
 
         let vertex_shader = program.vertex();
 
-
         let triangles: &mut [MaybeUninit<Triangle<T>>] = self
             .arena
             .alloc_slice_fill_clone(mesh.positions.len() / 3, &MaybeUninit::uninit());
@@ -111,30 +108,37 @@ impl PipelineForward {
                 let v1 = vertex_shader(Vertex::new(pos[1], data[1]), &uniforms_vertex);
                 let v2 = vertex_shader(Vertex::new(pos[2], data[2]), &uniforms_vertex);
 
-                let ndc = [
-                    v0.position.truncate() / v0.position.w,
-                    v1.position.truncate() / v1.position.w,
-                    v2.position.truncate() / v2.position.w,
-                ];
+                if v0.position.w < 0.1 || v1.position.w < 0.1 || v2.position.w < 0.1 {
+                    tri.write(Triangle::degenerate([v0.data, v0.data, v0.data]));
+                } else {
+                    let inv_w0 = 1.0 / v0.position.w;
+                    let inv_w1 = 1.0 / v1.position.w;
+                    let inv_w2 = 1.0 / v2.position.w;
+                    let ndc = [
+                        v0.position.truncate() * inv_w0,
+                        v1.position.truncate() * inv_w1,
+                        v2.position.truncate() * inv_w2,
+                    ];
 
-                let p0 = Self::to_screen_space(ndc[0], screen_width, screen_height);
-                let p1 = Self::to_screen_space(ndc[1], screen_width, screen_height);
-                let p2 = Self::to_screen_space(ndc[2], screen_width, screen_height);
-                match (p0, p1, p2) {
-                    // FIXME: We don't need this. We need to reject some other way. This is another branch in the hot loop.
-                    (Some(p0), Some(p1), Some(p2)) => {
-                        tri.write(Triangle {
-                            position: [p0, p1, p2],
-                            depth: [
-                                Vec2::new(v0.position.z, 1.0),
-                                Vec2::new(v1.position.z, 1.0),
-                                Vec2::new(v2.position.z, 1.0),
-                            ],
-                            data: [v0.data, v1.data, v2.data],
-                        });
-                    }
-                    _ => {
-                        tri.write(Triangle::degenerate([v0.data, v0.data, v0.data]));
+                    let p0 = Self::to_screen_space(ndc[0], screen_width, screen_height);
+                    let p1 = Self::to_screen_space(ndc[1], screen_width, screen_height);
+                    let p2 = Self::to_screen_space(ndc[2], screen_width, screen_height);
+                    match (p0, p1, p2) {
+                        // FIXME: We don't need this. We need to reject some other way. This is another branch in the hot loop.
+                        (Some(p0), Some(p1), Some(p2)) => {
+                            tri.write(Triangle {
+                                position: [p0, p1, p2],
+                                depth: [
+                                    Vec2::new(v0.position.z * inv_w0, inv_w0),
+                                    Vec2::new(v1.position.z * inv_w1, inv_w1),
+                                    Vec2::new(v2.position.z * inv_w2, inv_w2),
+                                ],
+                                data: [v0.data * inv_w0, v1.data * inv_w1, v2.data * inv_w2],
+                            });
+                        }
+                        _ => {
+                            tri.write(Triangle::degenerate([v0.data, v0.data, v0.data]));
+                        }
                     }
                 }
             });
@@ -176,8 +180,11 @@ impl PipelineForward {
                                 fragment.depth,
                             )
                         } {
-                            let frag_color =
-                                fragment_shader(&fragment, unsafe { ctx_ptr.as_mut() }, &uniforms_fragment);
+                            let frag_color = fragment_shader(
+                                &fragment,
+                                unsafe { ctx_ptr.as_mut() },
+                                &uniforms_fragment,
+                            );
                             unsafe {
                                 fb_ptr.as_mut().write_fragment(
                                     fragment.position.x,
@@ -379,7 +386,7 @@ impl PipelineForward {
         // FIXME: This is a reject approach. This straight up won't work for a game engine.
         // TODO: Implement https://pl.wikipedia.org/wiki/Algorytm_Sutherlanda-Hodgmana
         let x = (ndc.x + 1.0) * 0.5 * width as f32;
-        let y = (ndc.y + 1.0) * 0.5 * height as f32;
+        let y = (1.0 - ndc.y) * 0.5 * height as f32;
         if x < 0.0 || x > (width - 1) as f32 || y < 0.0 || y > (height - 1) as f32 {
             None
         } else {

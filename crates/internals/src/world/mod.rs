@@ -2,9 +2,7 @@ use hecs::{DynamicBundle, Entity};
 use renderer::lerp::Lerp;
 
 use crate::{
-    imports::model::{MeshData, Model},
-    systems::SystemHandler,
-    world::{
+    imports::model::{MeshData, Model, ModelHandle}, systems::SystemHandler, world::{
         material::{Material, MaterialHandle},
         transform::Transform,
     },
@@ -26,7 +24,7 @@ impl World {
 
     pub fn place_model_with_transform(
         &mut self,
-        model: Model<MeshData>,
+        model: ModelHandle,
         transform: Transform,
         material: MaterialHandle,
     ) -> Entity {
